@@ -1,0 +1,30 @@
+let pStatus = {
+  windowOpen: false,
+  playlistMode: false,
+  playlist: {},
+  trackId: 0,
+  repeat: 'none',
+  tcpPort: 12345,
+  webPort: 3000,
+  imageTime: 10,
+  startOnPlay: false,
+  startOnPlaylistId: null,
+  audioDevices: [],
+  audioDevice: '',
+  logoFile: '',
+  logoShow: false,
+  logoSize: 0,
+  file: {},
+  player: {
+    event: '',
+    volume: 100,
+    speed: 1.0,
+    position: 0,
+    duration: 0,
+    time: 0,
+  },
+  fullscreen: false,
+  backgroundColor: '#000000',
+}
+
+export default pStatus
