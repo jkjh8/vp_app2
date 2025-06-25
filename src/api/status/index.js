@@ -3,7 +3,30 @@ import pStatus from '../../pStatus.js'
 
 const updateStatusFromDb = async () => {
   const st = await dbStatus.find({})
-  Object.assign(pStatus, st)
+  for (const status of st) {
+    switch (status.type) {
+      case 'fullscreen':
+        pStatus.fullscreen = status.value
+        break
+      case 'backgroundColor':
+        pStatus.backgroundColor = status.value
+        break
+      case 'audioDevice':
+        pStatus.audioDevice = status.value
+        break
+      case 'logoFile':
+        pStatus.logoFile = status.file
+        break
+      case 'logoSize':
+        pStatus.logoSize = status.value
+        break
+      case 'logoShow':
+        pStatus.logoShow = status.value
+        break
+      default:
+        console.warn(`Unknown status type: ${status.type}`)
+    }
+  }
 }
 
 export { updateStatusFromDb }

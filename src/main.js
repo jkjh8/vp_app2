@@ -10,6 +10,7 @@ import {
   existsTmpPath,
 } from './api/files/folders.js'
 import { startTcpServer } from './tcp/index.js'
+import { startPlayer } from './player/index.js'
 
 app.whenReady().then(async () => {
   initLogger()
@@ -25,4 +26,5 @@ app.whenReady().then(async () => {
   setupFFmpeg()
   initWebServer()
   startTcpServer()
+  startPlayer()
 })

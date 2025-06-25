@@ -3,7 +3,8 @@ import { logger } from '../../logger/index.js'
 import pStatus from '../../pStatus.js'
 import { dbStatus, dbFiles } from '../../db/index.js'
 import { getLogoPath } from '../files/folders.js'
-import { broadcastTcpJson } from '../../tcp/index.js'
+import { playerSend } from '../../player/index.js'
+import { io, ioClient } from '../../web/index.js'
 // import { setPlaylistMode } from '../playlists/index.js'
 // import { sendPlayerCommand, sendMessageToClient } from '../index.js'
 // import { broadcastTcpMessage } from '../../tcp/index.js'
@@ -17,7 +18,7 @@ const setMedia = async (id) => {
   // sendPlayerCommand('set_media', { file })
   // setPlaylistMode(false)
   // broadcastTcpMessage(`set,${id},${file.filename}`)
-  broadcastTcpJson({ command: 'mediaSet', file: file.path })
+  playerSend({ command: 'mediaSet', file: file.path, mimetype: file.mimetype })
   return `Media set to: ${file.path}`
 }
 
@@ -27,10 +28,12 @@ const playId = async (id) => {
   if (!file) {
     throw new Error('Player not found')
   }
+  pStatus.file = file
+  ioClient.emit('pStatus', { file: pStatus.file })
   // sendPlayerCommand('playId', { file })
   // setPlaylistMode(false)
   // broadcastTcpMessage(`playId,${id},${file.filename}`)
-  broadcastTcpJson({ command: 'playId', file: file.path })
+  playerSend({ command: 'playId', file: file.path, mimetype: file.mimetype })
   return `Playing file: ${file.path}`
 }
 
@@ -51,14 +54,14 @@ const play_file = async (file) => {
 const play = (idx) => {
   logger.info('Received play request without ID')
   // sendPlayerCommand('play', { idx })
-  broadcastTcpJson({ command: 'play', idx })
+  playerSend({ command: 'play', idx })
   return 'Playing without ID'
 }
 
 const pause = (idx) => {
   logger.info('Received pause request')
   // sendPlayerCommand('pause', { idx })
-  broadcastTcpJson({ command: 'pause', idx })
+  playerSend({ command: 'pause', idx })
   return 'Player paused'
 }
 
@@ -66,55 +69,62 @@ const stop = () => {
   logger.info('Received stop request')
   // sendPlayerCommand('stop_all', {})
   // broadcastTcpMessage('stop')
-  broadcastTcpJson({ command: 'stop' })
+  playerSend({ command: 'stop' })
   return 'Player stopped'
 }
 
-const updateTime = (time, idx) => {
+const updateTime = (time) => {
   // sendPlayerCommand('set_time', { time, idx })
+  playerSend({ command: 'setTime', time })
   // broadcastTcpMessage(`set_time,${time}`)
-  return `Time updated to: ${time} for player ${idx}`
+  return `Time updated to: ${time}`
 }
 
 const setFullscreen = async (value) => {
   // sendPlayerCommand('set_fullscreen', { value })
   // broadcastTcpMessage(`set_fullscreen,${value}`)
-  broadcastTcpJson({ command: 'setFullscreen' })
+  playerSend({ command: 'setFullscreen' })
   return `Fullscreen mode set to: ${value}`
 }
 
-const setLogo = async (logo) => {
+const setLogoFile = async (logo) => {
   const filePath = path.join(getLogoPath(), logo)
-
-  pStatus.logo.file = filePath
-  pStatus.logo.name = logo
-  await dbStatus.update({ type: 'logo' }, { file: filePath, name: logo })
-  // sendMessageToClient('pStatus', {
-  //   logo: pStatus.logo,
-  // })
-  // sendPlayerCommand('logo_file', { file: filePath })
-  logger.info(`Setting logo to: ${logo} at path: ${filePath}`)
+  pStatus.logoFile = filePath
+  await dbStatus.update(
+    { type: 'logoFile' },
+    { $set: { file: filePath } },
+    { upsert: true },
+  )
+  playerSend({ command: 'setLogo', file: filePath, size: pStatus.logoSize })
+  ioClient.emit('pStatus', { logoFile: pStatus.logoFile })
   return `Logo set to: ${logo}`
 }
 
 const showLogo = async (show) => {
-  pStatus.logo.show = show
-  await dbStatus.update({ type: 'logo' }, { show })
-  // sendMessageToClient('pStatus', { logo: pStatus.logo })
-  // sendPlayerCommand('show_logo', { show })
+  pStatus.logoShow = show
+  await dbStatus.update(
+    { type: 'logoShow' },
+    { $set: { value: show } },
+    { upsert: true },
+  )
+  playerSend({ command: 'showLogo', show: show })
+  ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
   return `Logo visibility set to: ${show}`
 }
 
 const setLogoSize = async (size) => {
-  logger.info(`Setting logo size to: ${size}`)
-  pStatus.logo.size = size
-  await dbStatus.update({ type: 'logo' }, { size })
-  // sendMessageToClient('pStatus', {
-  //   logo: pStatus.logo,
-  // })
-  // sendPlayerCommand('logo_size', {
-  //   size,
-  // })
+  pStatus.logoSize = size
+  await dbStatus.update(
+    { type: 'logoSize' },
+    { $set: { value: size } },
+    { upsert: true },
+  )
+  playerSend({
+    command: 'setLogo',
+    file: pStatus.logoFile,
+    size: pStatus.logoSize,
+  })
+  ioClient.emit('pStatus', { logoSize: pStatus.logoSize })
   return `Logo size set to: ${size}`
 }
 
@@ -123,12 +133,14 @@ const setBackground = async (background) => {
     logger.warn('Received invalid background color from Python')
     return
   }
-  pStatus.background = background
-  await dbStatus.update({ type: 'background' }, { value: background })
-  // sendMessageToClient('pStatus', {
-  //   background: pStatus.background,
-  // })
-  // sendPlayerCommand('background_color', { color: background })
+  pStatus.backgroundColor = background
+  await dbStatus.update(
+    { type: 'backgroundColor' },
+    { $set: { value: background } },
+    { upsert: true },
+  )
+  playerSend({ command: 'setBackgroundColor', color: background })
+  ioClient.emit('pStatus', { backgroundColor: pStatus.backgroundColor })
   return `Background set to: ${background}`
 }
 
@@ -142,23 +154,22 @@ const setAudioDevice = async (deviceId) => {
     logger.warn('Received invalid audiodevice message from Python')
     return
   }
-  pStatus.device.audiodevice = deviceId
-  await dbStatus.update({ type: 'audiodevice' }, { audiodevice: deviceId })
-  // sendMessageToClient('pStatus', {
-  //   device: pStatus.device,
-  // })
-  // sendPlayerCommand('set_audio_device', { device: deviceId })
-  logger.info(`Setting audio device to: ${deviceId}`)
+  pStatus.audioDevice = deviceId
+  await dbStatus.update(
+    { type: 'audioDevice' },
+    { $set: { audioDevice: deviceId } },
+    { upsert: true },
+  )
+  playerSend({ command: 'setAudioOutput', deviceId: pStatus.audioDevice })
+  ioClient.emit('pStatus', { audioDevice: pStatus.audioDevice })
   return `Audio device set to: ${deviceId}`
 }
 
-const setImageTime = async (time) => {
+const setPlaylistImageTimeout = async (time) => {
   logger.info(`Setting image time to: ${time}`)
-  // sendPlayerCommand('image_time', { time })
-  await dbStatus.update({ type: 'image_time' }, { time })
-  // sendMessageToClient('pStatus', {
-  //   imageTime: time,
-  // })
+  playerSend({ command: 'setPlaylistImageTime', time })
+  await dbStatus.update({ type: 'imageTime' }, { time })
+  ioClient.emit('pStatus', { imageTime: time })
   return `Image time set to: ${time}`
 }
 
@@ -205,13 +216,13 @@ export {
   pause,
   updateTime,
   setFullscreen,
-  setLogo,
+  setLogoFile,
   showLogo,
   setLogoSize,
   setBackground,
   getAudioDevices,
   setAudioDevice,
-  setImageTime,
+  setPlaylistImageTimeout,
   setRepeat,
   setNext,
   setPrevious,
