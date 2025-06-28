@@ -42,6 +42,12 @@ const parsePlayerStatus = async (data) => {
             command: 'setPlaylistImageTime',
             time: pStatus.imageTime,
           })
+          playerSend({
+            command: 'setLogo',
+            file: pStatus.logoFile,
+            size: pStatus.logoSize,
+          })
+          playerSend({ command: 'showLogo', show: pStatus.logoShow })
           break
         case 'fullscreen':
           pStatus.fullscreen = value

@@ -12,7 +12,7 @@ import {
   setLogoFile,
   showLogo,
   setLogoSize,
-} from '../../api/player/index.js'
+} from '../../../api/player/index.js'
 
 const router = express.Router()
 

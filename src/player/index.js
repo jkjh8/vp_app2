@@ -9,7 +9,7 @@ let player
 const startPlayer = () => {
   // C:\Users\kjh\Desktop\DEV\player\player\bin\Release\net8.0-windows
   const playerPath = path.resolve(
-    '../player/player/bin/Release/net8.0-windows',
+    '../player_csharp/player/bin/Release/net8.0-windows',
     'player.exe',
   )
   player = spawn(playerPath, {
