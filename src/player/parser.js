@@ -67,6 +67,16 @@ const parsePlayerStatus = async (data) => {
           pStatus.audioDevices = value
           ioClient.emit('pStatus', { audioDevices: value })
           break
+        case 'mediaPlayerStatus':
+          pStatus.player = { ...pStatus.player, ...value }
+          ioClient.emit('pStatus', { player: pStatus.player })
+          break
+        case 'endReached':
+          //
+          break
+        default:
+          logger.warn(`Unknown command received: ${command}`)
+          break
       }
     }
   } catch (error) {

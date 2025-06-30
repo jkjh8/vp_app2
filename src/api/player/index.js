@@ -5,7 +5,7 @@ import { dbStatus, dbFiles } from '../../db/index.js'
 import { getLogoPath } from '../files/folders.js'
 import { playerSend } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
-// import { setPlaylistMode } from '../playlists/index.js'
+import { setPlaylistMode } from '../playlists/index.js'
 // import { sendPlayerCommand, sendMessageToClient } from '../index.js'
 // import { broadcastTcpMessage } from '../../tcp/index.js'
 
@@ -16,7 +16,7 @@ const setMedia = async (id) => {
     throw new Error('File not found')
   }
   // sendPlayerCommand('set_media', { file })
-  // setPlaylistMode(false)
+  setPlaylistMode(false)
   // broadcastTcpMessage(`set,${id},${file.filename}`)
   playerSend({ command: 'mediaSet', file: file.path, mimetype: file.mimetype })
   return `Media set to: ${file.path}`
@@ -31,24 +31,21 @@ const playId = async (id) => {
   pStatus.file = file
   ioClient.emit('pStatus', { file: pStatus.file })
   // sendPlayerCommand('playId', { file })
-  // setPlaylistMode(false)
+  setPlaylistMode(false)
   // broadcastTcpMessage(`playId,${id},${file.filename}`)
   playerSend({ command: 'playId', file: file.path, mimetype: file.mimetype })
   return `Playing file: ${file.path}`
 }
 
-const play_file = async (file) => {
-  logger.info(`Received play_file request with file: ${file}`)
-  const foundFile = await dbFiles.findOne({
-    filename: { $regex: file, $options: 'i' },
-  })
-  if (!foundFile) {
-    throw new Error('File not found')
+const playFile = async (file) => {
+  try {
+    playerSend({ command: 'playId', file: file.path, mimetype: file.mimetype })
+    pStatus.file = file
+    ioClient.emit('pStatus', { file: pStatus.file })
+    return `Playing file: ${file.path}`
+  } catch (error) {
+    logger.error(`Error playing file: ${error.message}`)
   }
-  // sendPlayerCommand('playId', { file: foundFile })
-  // setPlaylistMode(false)
-  // broadcastTcpMessage(`playId,${foundFile.number},${foundFile.filename}`)
-  return `Playing file: ${foundFile.path}`
 }
 
 const play = (idx) => {
@@ -195,6 +192,14 @@ const setRepeat = async (mode = null) => {
 const setNext = async () => {
   logger.info('Setting next track in playlist')
   // sendPlayerCommand('next', {})
+  if (pStatus.playlistMode) {
+    pStatus.trackId += 1
+    if (pStatus.trackId >= pStatus.playlist.tracks.length) {
+      pStatus.trackId = 0 // Loop back to the start
+    }
+    playFile(pStatus.playlist.tracks[pStatus.trackId])
+    ioClient.emit('pStatus', { trackId: pStatus.trackId })
+  }
   return 'Next track set'
 }
 
@@ -210,7 +215,7 @@ export {
   // sendPlayerCommand,
   setMedia,
   playId,
-  play_file,
+  playFile,
   play,
   stop,
   pause,

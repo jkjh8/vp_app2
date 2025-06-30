@@ -17,7 +17,6 @@ const startPlayer = () => {
     shell: false,
   })
   player.stdout.on('data', (data) => {
-    logger.info(`Player stdout: ${data}`)
     parser(data.toString().trim())
   })
   player.stderr.on('data', (data) => {
