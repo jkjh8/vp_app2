@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^36.5.0",
     "electron-builder": "^26.0.12",
     "eslint": "^9.29.0",
@@ -15,18 +16,23 @@
   },
   "scripts": {
     "start": "electron .",
-    "dev": "nodemon --exec electron .",
+    "dev": "cross-env NODE_ENV=development nodemon --exec electron .",
     "lint": "eslint . --ext .js",
     "format": "prettier --write .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "build": "electron-builder"
   },
   "build": {
     "appId": "com.example.vpapp2",
-    "productName": "VP App2",
+    "productName": "VP App",
     "directories": {
       "output": "dist"
     },
+    "extraFiles": [
+      {
+        "from": "src/player/lib",
+        "to": "player"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -35,7 +41,16 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "./public/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "./public/icons/icon.ico",
+      "uninstallerIcon": "./public/icons/icon.ico",
+      "uninstallDisplayName": "VP App Uninstaller"
     }
   },
   "dependencies": {

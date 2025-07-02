@@ -1,17 +1,22 @@
 import { spawn } from 'child_process'
-import { app } from 'electron'
 import { logger } from '../logger/index.js'
 import path from 'path'
-import pStatus from '../pStatus.js'
 import parser from './parser.js'
 
 let player
 const startPlayer = () => {
-  // C:\Users\kjh\Desktop\DEV\player\player\bin\Release\net8.0-windows
-  const playerPath = path.resolve(
-    '../player_csharp/player/bin/Release/net8.0-windows',
-    'player.exe',
-  )
+  let playerPath
+  if (process.env.NODE_ENV === 'development') {
+    // 개발 환경: src/player/lib/player.exe 사용
+    playerPath = path.resolve(
+      '../player_csharp/player/bin/x64/Release/net8.0-windows',
+      'player.exe',
+    )
+  } else {
+    // 빌드(배포) 환경: 실행파일과 같은 위치의 player 폴더 사용
+    playerPath = path.join('player', 'player.exe')
+  }
+
   player = spawn(playerPath, {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,

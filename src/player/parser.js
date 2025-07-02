@@ -4,6 +4,7 @@ import { ioClient } from '../web/index.js'
 import { playerSend } from './index.js'
 import { dbStatus } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
+import { app } from 'electron'
 
 function handleReady() {
   pStatus.ready = true
@@ -115,6 +116,9 @@ const parsePlayerStatus = async (data) => {
           break
         case 'endReached':
           handleEndReached()
+          break
+        case 'closed':
+          app.exit(0)
           break
         default:
           logger.warn(`Unknown command received: ${command}`)

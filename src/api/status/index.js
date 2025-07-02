@@ -26,6 +26,12 @@ const updateStatusFromDb = async () => {
       case 'imageTime':
         pStatus.imageTime = status.value
         break
+      case 'startOnPlay':
+        pStatus.startOnPlay = status.value
+        break
+      case 'startOnPlaylistId':
+        pStatus.startOnPlaylistId = status.playlistId
+        break
       default:
         console.warn(`Unknown status type: ${status.type}`)
     }

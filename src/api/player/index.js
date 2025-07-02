@@ -33,18 +33,42 @@ const playId = async (id) => {
   // sendPlayerCommand('playId', { file })
   setPlaylistMode(false)
   // broadcastTcpMessage(`playId,${id},${file.filename}`)
-  playerSend({ command: 'playId', file: file.path, mimetype: file.mimetype })
+  playerSend({
+    command: 'playId',
+    file: file.path,
+    mimetype: file.mimetype,
+    time: file.time,
+  })
   return `Playing file: ${file.path}`
 }
 
 const playFile = async (file) => {
   try {
-    playerSend({ command: 'playId', file: file.path, mimetype: file.mimetype })
+    playerSend({
+      command: 'playId',
+      file: file.path,
+      mimetype: file.mimetype,
+      time: file.time,
+    })
     pStatus.file = file
     ioClient.emit('pStatus', { file: pStatus.file })
     return `Playing file: ${file.path}`
   } catch (error) {
     logger.error(`Error playing file: ${error.message}`)
+  }
+}
+
+const playFoundFile = async (text) => {
+  try {
+    const file = await dbFiles.findOne({
+      filename: { $regex: text, $options: 'i' },
+    })
+    if (!file) {
+      throw new Error('File not found')
+    }
+    playFile(file)
+  } catch (error) {
+    logger.error(`Error playing found file: ${error.message}`)
   }
 }
 
@@ -207,7 +231,15 @@ const setPrevious = async () => {
   logger.info('Setting previous track in playlist')
   // sendPlayerCommand('previous', {})
   // 재생시간이 5초 미만이면 playlistTrackIndex를 -1
-
+  if (pStatus.playlistMode) {
+    if (pStatus.player.time < 5000) {
+      if (pStatus.trackId > 0) {
+        pStatus.trackId -= 1
+        return playFile(pStatus.playlist.tracks[pStatus.trackId])
+      }
+    }
+  }
+  updateTime(0)
   return 'Previous track set'
 }
 
@@ -231,4 +263,5 @@ export {
   setRepeat,
   setNext,
   setPrevious,
+  playFoundFile,
 }

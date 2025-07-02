@@ -1,7 +1,7 @@
 import net from 'net'
 import pStatus from '../pStatus.js'
 import { logger } from '../logger/index.js'
-import parser from '../player/parser.js'
+import { handleMessage } from '../api/terminal/index.js'
 
 let tcpServer = null
 let tcpClients = []
@@ -12,19 +12,11 @@ function startTcpServer(port = pStatus.tcpPort) {
       `TCP client connected: ${socket.remoteAddress}:${socket.remotePort}`,
     )
     tcpClients.push(socket)
-    broadcastTcpJson({
-      command: 'setBackgroundColor',
-      color: pStatus.backgroundColor,
-    })
-    // broadcastTcpJson({
-    //   command: 'setLogo',
-    //   file: pStatus.logoFile,
-    //   size: pStatus.logoSize,
-    // })
+    socket.write('Welcome to the TCP server!\n')
 
     socket.on('data', (data) => {
       logger.info(`TCP data received: ${data}`)
-      parser(data.toString())
+      handleMessage(data.toString())
       // 여기에 데이터 처리 로직 추가
     })
 
