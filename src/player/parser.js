@@ -3,6 +3,76 @@ import { logger } from '../logger/index.js'
 import { ioClient } from '../web/index.js'
 import { playerSend } from './index.js'
 import { dbStatus } from '../db/index.js'
+import { playFile, play, stop } from '../api/player/index.js'
+
+function handleReady() {
+  pStatus.ready = true
+  logger.info('Player is ready')
+  ioClient.emit('pStatus', { ready: true })
+
+  // Prepare commands to send
+  const commands = [
+    { command: 'setBackgroundColor', color: pStatus.backgroundColor },
+    pStatus.fullscreen && { command: 'setFullscreen', value: true },
+    { command: 'getAudioDevices' },
+    pStatus.audioDevice && {
+      command: 'setAudioDevice',
+      deviceId: pStatus.audioDevice,
+    },
+    pStatus.playlistMode && {
+      command: 'setPlaylistMode',
+      value: pStatus.playlistMode,
+    },
+    { command: 'setPlaylistImageTime', time: pStatus.imageTime },
+    { command: 'setLogo', file: pStatus.logoFile, size: pStatus.logoSize },
+    { command: 'showLogo', show: pStatus.logoShow },
+  ].filter(Boolean)
+
+  // Send commands and log as needed
+  for (const cmd of commands) {
+    playerSend(cmd)
+    if (cmd.command === 'setFullscreen') logger.info('Fullscreen mode enabled')
+    if (cmd.command === 'setAudioDevice')
+      logger.info(`Audio device set to: ${pStatus.audioDevice}`)
+    if (cmd.command === 'setPlaylistMode')
+      logger.info(`Playlist mode set to: ${pStatus.playlistMode}`)
+  }
+}
+
+function handleEndReached() {
+  const repeat = pStatus.repeat
+  const playlistMode = pStatus.playlistMode
+
+  if (repeat === 'none') {
+    if (playlistMode) {
+      if (pStatus.playlist.tracks.length > pStatus.trackId + 1) {
+        pStatus.trackId += 1
+        playFile(pStatus.playlist.tracks[pStatus.trackId])
+      } else {
+        stop()
+      }
+    } else {
+      stop()
+    }
+  } else if (repeat === 'all') {
+    if (playlistMode) {
+      if (pStatus.playlist.tracks.length > pStatus.trackId + 1) {
+        pStatus.trackId += 1
+      } else {
+        pStatus.trackId = 0
+      }
+      playFile(pStatus.playlist.tracks[pStatus.trackId])
+    } else {
+      stop()
+      play()
+    }
+  } else if (repeat === 'repeat_one') {
+    stop()
+    play()
+  } else {
+    stop()
+  }
+}
 
 const parsePlayerStatus = async (data) => {
   try {
@@ -12,42 +82,17 @@ const parsePlayerStatus = async (data) => {
       const { command, value } = JSON.parse(msg)
       switch (command) {
         case 'ready':
-          pStatus.ready = true
-          logger.info('Player is ready')
-          ioClient.emit('pStatus', { ready: true })
-          playerSend({
-            command: 'setBackgroundColor',
-            color: pStatus.backgroundColor,
-          })
-          if (pStatus.fullscreen) {
-            playerSend({ command: 'setFullscreen', value: true })
-            logger.info('Fullscreen mode enabled')
-          }
-          playerSend({ command: 'getAudioDevices' })
-          if (pStatus.audioDevice) {
-            playerSend({
-              command: 'setAudioDevice',
-              deviceId: pStatus.audioDevice,
-            })
-            logger.info(`Audio device set to: ${pStatus.audioDevice}`)
-          }
-          if (pStatus.playlistMode) {
-            playerSend({
-              command: 'setPlaylistMode',
-              value: pStatus.playlistMode,
-            })
-            logger.info(`Playlist mode set to: ${pStatus.playlistMode}`)
-          }
-          playerSend({
-            command: 'setPlaylistImageTime',
-            time: pStatus.imageTime,
-          })
-          playerSend({
-            command: 'setLogo',
-            file: pStatus.logoFile,
-            size: pStatus.logoSize,
-          })
-          playerSend({ command: 'showLogo', show: pStatus.logoShow })
+          handleReady()
+          break
+        case 'playlistImageTime':
+          pStatus.imageTime = value
+          await dbStatus.update(
+            { type: 'imageTime' },
+            { $set: { value } },
+            { upsert: true },
+          )
+          ioClient.emit('pStatus', { imageTime: value })
+          logger.debug(`Image time set to: ${value}`)
           break
         case 'fullscreen':
           pStatus.fullscreen = value
@@ -60,6 +105,7 @@ const parsePlayerStatus = async (data) => {
           ioClient.emit('pStatus', { fullscreen: value })
           break
         case 'status':
+        case 'mediaPlayerStatus':
           pStatus.player = { ...pStatus.player, ...value }
           ioClient.emit('pStatus', { player: pStatus.player })
           break
@@ -67,12 +113,8 @@ const parsePlayerStatus = async (data) => {
           pStatus.audioDevices = value
           ioClient.emit('pStatus', { audioDevices: value })
           break
-        case 'mediaPlayerStatus':
-          pStatus.player = { ...pStatus.player, ...value }
-          ioClient.emit('pStatus', { player: pStatus.player })
-          break
         case 'endReached':
-          //
+          handleEndReached()
           break
         default:
           logger.warn(`Unknown command received: ${command}`)
