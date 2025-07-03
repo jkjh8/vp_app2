@@ -6,8 +6,6 @@ import { getLogoPath } from '../files/folders.js'
 import { playerSend } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
-// import { sendPlayerCommand, sendMessageToClient } from '../index.js'
-// import { broadcastTcpMessage } from '../../tcp/index.js'
 
 const setMedia = async (id) => {
   logger.info(`Setting media with ID: ${id}`)
@@ -15,9 +13,7 @@ const setMedia = async (id) => {
   if (!file) {
     throw new Error('File not found')
   }
-  // sendPlayerCommand('set_media', { file })
   setPlaylistMode(false)
-  // broadcastTcpMessage(`set,${id},${file.filename}`)
   playerSend({ command: 'mediaSet', file: file.path, mimetype: file.mimetype })
   return `Media set to: ${file.path}`
 }
@@ -30,9 +26,7 @@ const playId = async (id) => {
   }
   pStatus.file = file
   ioClient.emit('pStatus', { file: pStatus.file })
-  // sendPlayerCommand('playId', { file })
   setPlaylistMode(false)
-  // broadcastTcpMessage(`playId,${id},${file.filename}`)
   playerSend({
     command: 'playId',
     file: file.path,
@@ -72,40 +66,32 @@ const playFoundFile = async (text) => {
   }
 }
 
-const play = (idx) => {
+const play = () => {
   logger.info('Received play request without ID')
-  // sendPlayerCommand('play', { idx })
-  playerSend({ command: 'play', idx })
+  playerSend({ command: 'play' })
   return 'Playing without ID'
 }
 
-const pause = (idx) => {
+const pause = () => {
   logger.info('Received pause request')
-  // sendPlayerCommand('pause', { idx })
-  playerSend({ command: 'pause', idx })
+  playerSend({ command: 'pause' })
   return 'Player paused'
 }
 
 const stop = () => {
   logger.info('Received stop request')
-  // sendPlayerCommand('stop_all', {})
-  // broadcastTcpMessage('stop')
   playerSend({ command: 'stop' })
   return 'Player stopped'
 }
 
 const updateTime = (time) => {
-  // sendPlayerCommand('set_time', { time, idx })
   playerSend({ command: 'setTime', time })
-  // broadcastTcpMessage(`set_time,${time}`)
   return `Time updated to: ${time}`
 }
 
-const setFullscreen = async (value) => {
-  // sendPlayerCommand('set_fullscreen', { value })
-  // broadcastTcpMessage(`set_fullscreen,${value}`)
+const setFullscreen = async () => {
   playerSend({ command: 'setFullscreen' })
-  return `Fullscreen mode set to: ${value}`
+  return `Fullscreen mode set`
 }
 
 const setLogoFile = async (logo) => {
@@ -166,7 +152,6 @@ const setBackground = async (background) => {
 }
 
 const getAudioDevices = () => {
-  // sendPlayerCommand('get_audio_devices', {})
   return 'Requesting current audio device'
 }
 
@@ -207,15 +192,11 @@ const setRepeat = async (mode = null) => {
   }
   await dbStatus.update({ type: 'repeat' }, { mode: pStatus.repeat })
   logger.info(`Repeat mode set to: ${pStatus.repeat}`)
-  // sendMessageToClient('pStatus', {
-  //   repeat: pStatus.repeat,
-  // })
   return pStatus.repeat
 }
 
 const setNext = async () => {
   logger.info('Setting next track in playlist')
-  // sendPlayerCommand('next', {})
   if (pStatus.playlistMode) {
     pStatus.trackId += 1
     if (pStatus.trackId >= pStatus.playlist.tracks.length) {
@@ -229,8 +210,6 @@ const setNext = async () => {
 
 const setPrevious = async () => {
   logger.info('Setting previous track in playlist')
-  // sendPlayerCommand('previous', {})
-  // 재생시간이 5초 미만이면 playlistTrackIndex를 -1
   if (pStatus.playlistMode) {
     if (pStatus.player.time < 5000) {
       if (pStatus.trackId > 0) {
@@ -244,7 +223,6 @@ const setPrevious = async () => {
 }
 
 export {
-  // sendPlayerCommand,
   setMedia,
   playId,
   playFile,

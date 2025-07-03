@@ -5,6 +5,7 @@ import { playerSend } from './index.js'
 import { dbStatus } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { app } from 'electron'
+import { broadcastTcpJson } from '../tcp/index.js'
 
 function handleReady() {
   pStatus.ready = true
@@ -49,11 +50,14 @@ function handleEndReached() {
       if (pStatus.playlist.tracks.length > pStatus.trackId + 1) {
         pStatus.trackId += 1
         playFile(pStatus.playlist.tracks[pStatus.trackId])
+        broadcastTcpJson({ command: 'next', track: pStatus.trackId })
       } else {
         stop()
+        broadcastTcpJson({ command: 'endReached' })
       }
     } else {
       stop()
+      broadcastTcpJson({ command: 'endReached' })
     }
   } else if (repeat === 'all') {
     if (playlistMode) {
@@ -63,6 +67,7 @@ function handleEndReached() {
         pStatus.trackId = 0
       }
       playFile(pStatus.playlist.tracks[pStatus.trackId])
+      broadcastTcpJson({ command: 'next', track: pStatus.trackId })
     } else {
       stop()
       play()
@@ -72,6 +77,7 @@ function handleEndReached() {
     play()
   } else {
     stop()
+    broadcastTcpJson({ command: 'endReached' })
   }
 }
 
@@ -93,6 +99,7 @@ const parsePlayerStatus = async (data) => {
             { upsert: true },
           )
           ioClient.emit('pStatus', { imageTime: value })
+          broadcastTcpJson({ command: 'imagetime', time: value })
           logger.debug(`Image time set to: ${value}`)
           break
         case 'fullscreen':
@@ -104,6 +111,7 @@ const parsePlayerStatus = async (data) => {
             { upsert: true },
           )
           ioClient.emit('pStatus', { fullscreen: value })
+          broadcastTcpJson({ command: 'fullscreen', value })
           break
         case 'status':
         case 'mediaPlayerStatus':
@@ -113,6 +121,7 @@ const parsePlayerStatus = async (data) => {
         case 'audioDevices':
           pStatus.audioDevices = value
           ioClient.emit('pStatus', { audioDevices: value })
+          broadcastTcpJson({ command: 'audioDevices', devices: value })
           break
         case 'endReached':
           handleEndReached()

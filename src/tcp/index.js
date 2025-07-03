@@ -14,10 +14,24 @@ function startTcpServer(port = pStatus.tcpPort) {
     tcpClients.push(socket)
     socket.write('Welcome to the TCP server!\n')
 
-    socket.on('data', (data) => {
-      logger.info(`TCP data received: ${data}`)
-      handleMessage(data.toString())
-      // 여기에 데이터 처리 로직 추가
+    socket.on('data', async (data) => {
+      const messages = data.toString().split('\n')
+      for (let message of messages) {
+        try {
+          if (message.trim()) {
+            logger.info(`TCP message received: ${message}`)
+            const r = await handleMessage(message)
+            if (r) {
+              broadcastTcpJson({ result: 'ok', ...r })
+            } else {
+              socket.write(JSON.stringify({ result: 'ok' }) + '\n')
+            }
+          }
+        } catch (error) {
+          socket.write(JSON.stringify({ result: 'error' }) + '\n')
+          logger.error('Error handling TCP message:', error)
+        }
+      }
     })
 
     socket.on('end', () => {
