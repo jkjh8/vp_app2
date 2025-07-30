@@ -129,8 +129,11 @@ const parsePlayerStatus = async (data) => {
         case 'closed':
           app.exit(0)
           break
+        case 'playlistMode':
+          logger.info(`Player - Playlist mode set to: ${value}`)
+          break
         default:
-          logger.warn(`Unknown command received: ${command}`)
+          logger.warn(`Unknown command received from player: ${command}`)
           break
       }
     }
