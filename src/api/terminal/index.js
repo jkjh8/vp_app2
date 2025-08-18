@@ -15,7 +15,7 @@ import {
   setRepeat,
 } from '../player/index.js'
 import { playlistPlay } from '../playlists/index.js'
-import { dbFiles } from '../../db/index.js'
+import { dbFiles, dbPlaylists } from '../../db/index.js'
 
 const parseSimpleCommand = (data) => {
   // 간단한 command,value 형태 파싱
@@ -36,6 +36,16 @@ const parseIntOrValue = (v) => {
   return Number.isNaN(n) ? v : n
 }
 
+// helper to parse boolean-like strings
+const parseBool = (v) => {
+  if (v === null || v === undefined) return undefined
+  if (typeof v === 'boolean') return v
+  const s = String(v).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true
+  if (['0', 'false', 'no', 'off'].includes(s)) return false
+  return undefined
+}
+
 // normalize message from either JSON or simple command format
 const normalizeMessage = (data) => {
   try {
@@ -44,6 +54,10 @@ const normalizeMessage = (data) => {
     // normalize command name for consistent handling
     msg.command = String(msg.command).toLowerCase()
     if (msg.command === 'repeat') msg.command = 'setrepeat'
+    // if JSON fullscreen provided, normalize value to boolean when possible
+    if (msg.command === 'fullscreen' && typeof msg.value !== 'undefined') {
+      msg.fullscreen = parseBool(msg.value)
+    }
     msg._isJson = true
     return msg
   } catch (e) {
@@ -53,43 +67,55 @@ const normalizeMessage = (data) => {
 
     // normalize aliases
     const low = msg.command.toLowerCase()
+    // normalize command name to lowercase for consistent handling
+    msg.command = low
+    // map common aliases
+    if (low === 'setfullscreen' || low === 'full') msg.command = 'fullscreen'
     if (low === 'setrepeat' || low === 'set_repeat' || low === 'repeat')
       msg.command = 'setrepeat'
     if (low === 'get_repeat' || low === 'getrepeat') msg.command = 'getrepeat'
 
     // map simple value into appropriate properties without side effects
+    // note: msg.value may be null if no second part provided
+    // special-case repeat mapping from simple value
     if (msg.value) {
-      switch (msg.command.toLowerCase()) {
-        case 'setrepeat':
-        case 'repeat':
-          // support both aliases; set mode from simple value
-          msg.mode = msg.value ? msg.value : null
-          break
-        case 'playfile':
-          msg.file = msg.value
-          break
-        case 'playid':
-          msg.id = parseIntOrValue(msg.value)
-          break
-        case 'updatetime':
-          msg.time = parseIntOrValue(msg.value)
-          break
-        case 'imagetime':
-          msg.time = parseIntOrValue(msg.value)
-          break
-        case 'playlistplay': {
-          const parts = msg.value.split(',')
-          msg.id = parseIntOrValue(parts[0])
-          msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
-          break
-        }
-        case 'setaudiodevice':
-          msg.device = msg.value
-          break
-        default:
-          // leave as-is; many commands have no mapped value
-          break
+      if (msg.command === 'setrepeat') {
+        msg.mode = msg.value ? msg.value : null
       }
+    }
+    switch (msg.command.toLowerCase()) {
+      case 'playfile':
+        msg.file = msg.value
+        break
+      case 'playid':
+        msg.id = parseIntOrValue(msg.value)
+        break
+      case 'updatetime':
+        msg.time = parseIntOrValue(msg.value)
+        break
+      case 'imagetime':
+        msg.time = parseIntOrValue(msg.value)
+        break
+      case 'playlistplay': {
+        const parts = msg.value.split(',')
+        msg.id = parseIntOrValue(parts[0])
+        msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
+        break
+      }
+      case 'setaudiodevice':
+        msg.device = msg.value
+        break
+      case 'fullscreen':
+        // if no value provided in simple command, leave undefined so caller will toggle
+        if (msg.value == null) {
+          msg.fullscreen = undefined
+        } else {
+          msg.fullscreen = parseBool(msg.value)
+        }
+        break
+      default:
+        // leave as-is; many commands have no mapped value
+        break
     }
     return msg
   }
@@ -138,7 +164,21 @@ const handleMessage = async (data) => {
         }
         break
       case 'fullscreen':
-        setFullscreen()
+        // message.fullscreen may be boolean or undefined.
+        // if undefined -> toggle using current pStatus.fullscreen
+        let fs =
+          typeof message.fullscreen !== 'undefined'
+            ? message.fullscreen
+            : undefined
+        if (typeof fs === 'undefined') fs = !pStatus.fullscreen
+        // ensure boolean
+        fs = Boolean(fs)
+        await setFullscreen(fs)
+        result = { fullscreen: fs }
+        break
+      case 'togglefullscreen':
+        await setFullscreen(!pStatus.fullscreen)
+        result = { fullscreen: !pStatus.fullscreen }
         break
       case 'setrepeat':
         // check allowed modes based on playlistMode and validate requested mode

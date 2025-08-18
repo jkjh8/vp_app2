@@ -89,8 +89,9 @@ const updateTime = (time) => {
   return `Time updated to: ${time}`
 }
 
-const setFullscreen = async () => {
-  playerSend({ command: 'setFullscreen' })
+const setFullscreen = async (value) => {
+  value = value !== undefined ? value : pStatus.fullscreen
+  playerSend({ command: 'fullscreen', value: value })
   return `Fullscreen mode set`
 }
 
