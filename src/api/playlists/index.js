@@ -1,6 +1,6 @@
 import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
-import { dbPlaylists, dbFiles } from '../../db/index.js'
+import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
@@ -142,10 +142,31 @@ const setPlaylistTrackIndex = async (idx) => {
   }
 }
 
-const setPlaylistMode = (mode) => {
+const setPlaylistMode = async (mode) => {
   try {
     pStatus.playlistMode = Boolean(mode)
     playerSend({ command: 'setPlaylistMode', value: pStatus.playlistMode })
+
+    // If we're turning playlist mode OFF and repeat was 'repeat_one', switch to 'all'
+    if (!pStatus.playlistMode && pStatus.repeat === 'repeat_one') {
+      pStatus.repeat = 'all'
+      try {
+        // persist repeat change if dbStatus available
+        if (typeof dbStatus !== 'undefined' && dbStatus) {
+          await dbStatus.update({ type: 'repeat' }, { mode: pStatus.repeat })
+        }
+      } catch (dbErr) {
+        logger.error(
+          'Failed to persist repeat change when disabling playlist mode',
+          dbErr,
+        )
+      }
+      ioClient.emit('pStatus', { repeat: pStatus.repeat })
+      logger.info(
+        `Repeat mode changed to '${pStatus.repeat}' because playlist mode was disabled`,
+      )
+    }
+
     ioClient.emit('pStatus', { playlistMode: pStatus.playlistMode })
     return pStatus.playlistMode
   } catch (error) {
@@ -199,7 +220,7 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       }
       pStatus.playlist = playlist
     }
-    setPlaylistMode(true)
+    await setPlaylistMode(true)
     pStatus.trackId = Number(trackIdx)
     ioClient.emit('pStatus', {
       playlist: pStatus.playlist,

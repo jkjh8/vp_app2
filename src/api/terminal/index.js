@@ -12,6 +12,7 @@ import {
   updateTime,
   pause,
   setFullscreen,
+  setRepeat,
 } from '../player/index.js'
 import { playlistPlay } from '../playlists/index.js'
 import { dbFiles } from '../../db/index.js'
@@ -28,69 +29,78 @@ const parseSimpleCommand = (data) => {
   return null
 }
 
+// helper to parse integers when possible
+const parseIntOrValue = (v) => {
+  if (v === null || v === undefined) return v
+  const n = parseInt(v)
+  return Number.isNaN(n) ? v : n
+}
+
+// normalize message from either JSON or simple command format
+const normalizeMessage = (data) => {
+  try {
+    const msg = JSON.parse(data)
+    if (!msg || !msg.command) throw new Error('Invalid JSON')
+    msg._isJson = true
+    return msg
+  } catch (e) {
+    // not JSON -> try simple parser
+    const msg = parseSimpleCommand(data)
+    if (!msg || !msg.command) return null
+
+    // normalize aliases
+    const low = msg.command.toLowerCase()
+    if (low === 'setrepeat' || low === 'set_repeat') msg.command = 'repeat'
+    if (low === 'get_repeat') msg.command = 'getrepeat'
+
+    // map simple value into appropriate properties without side effects
+    if (msg.value) {
+      switch (msg.command.toLowerCase()) {
+        case 'playfile':
+          msg.file = msg.value
+          break
+        case 'playid':
+          msg.id = parseIntOrValue(msg.value)
+          break
+        case 'updatetime':
+          msg.time = parseIntOrValue(msg.value)
+          break
+        case 'imagetime':
+          msg.time = parseIntOrValue(msg.value)
+          break
+        case 'playlistplay': {
+          const parts = msg.value.split(',')
+          msg.id = parseIntOrValue(parts[0])
+          msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
+          break
+        }
+        case 'repeat':
+          msg.mode = msg.value ? msg.value : null
+          break
+        case 'setaudiodevice':
+          msg.device = msg.value
+          break
+        default:
+          // leave as-is; many commands have no mapped value
+          break
+      }
+    }
+    return msg
+  }
+}
+
 const handleMessage = async (data) => {
   logger.info(`Received message: ${data}`)
   try {
     let result = null
     let message = null
 
-    // JSON 파싱 시도
-    try {
-      message = JSON.parse(data)
-      if (!message || !message.command) {
-        throw new Error('Invalid JSON message format')
-      }
-    } catch (jsonError) {
-      // JSON이 아니면 간단한 command,value 형태로 파싱
-      logger.info('JSON parsing failed, trying simple command format')
-      message = parseSimpleCommand(data)
-      if (!message || !message.command) {
-        throw new Error('Invalid message format')
-      }
-      // 간단한 형태에서는 value를 적절한 속성으로 매핑
-      if (message.value) {
-        switch (message.command.toLowerCase()) {
-          case 'playfile':
-            message.file = message.value
-            break
-          case 'playid':
-            message.id = parseInt(message.value)
-            break
-          case 'updatetime':
-            if (message.time) {
-              updateTime(message.time)
-            }
-            break
-          case 'imagetime':
-            if (message.time) {
-              await setPlaylistImageTimeout(message.time)
-              result = { imageTime: pStatus.imageTime }
-            }
-            break
-          case 'fullscreen':
-            setFullscreen()
-            break
-          case 'play':
-            play()
-            break
-          case 'next':
-            setNext()
-            break
-          case 'prev':
-            setPrevious()
-            break
-          case 'stop':
-            stop()
-            break
-          case 'playlistplay':
-            const playlistParts = message.value.split(',')
-            message.id = parseInt(playlistParts[0])
-            message.track =
-              playlistParts.length > 1 ? parseInt(playlistParts[1]) : 0
-            break
-        }
-      }
+    // parse/normalize incoming message (JSON or simple)
+    message = normalizeMessage(data)
+    if (!message || !message.command) {
+      throw new Error('Invalid message format')
     }
+
     let command = message.command
     console.log(`Command: ${command}`)
     command = command.toLowerCase()
@@ -123,6 +133,33 @@ const handleMessage = async (data) => {
         break
       case 'fullscreen':
         setFullscreen()
+        break
+      case 'setrepeat':
+        // check allowed modes based on playlistMode and validate requested mode
+        const allowedModes =
+          pStatus.playlistMode === false
+            ? ['none', 'all']
+            : ['none', 'all', 'repeat_one']
+        if (message.mode) {
+          if (!allowedModes.includes(message.mode)) {
+            result = { error: 'invalid_mode', allowedModes }
+          } else {
+            const modeResult = await setRepeat(message.mode)
+            result = { repeat: modeResult }
+          }
+        } else {
+          // no mode specified -> toggle to next
+          const modeResult = await setRepeat()
+          result = { repeat: modeResult }
+        }
+        break
+      case 'getrepeat':
+        // return current repeat mode and allowed modes
+        const allowed =
+          pStatus.playlistMode === false
+            ? ['none', 'all']
+            : ['none', 'all', 'repeat_one']
+        result = { repeat: pStatus.repeat, allowedModes: allowed }
         break
       case 'getaudiodevices':
         result = { devices: pStatus.audioDevices }
