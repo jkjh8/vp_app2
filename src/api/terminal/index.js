@@ -41,6 +41,9 @@ const normalizeMessage = (data) => {
   try {
     const msg = JSON.parse(data)
     if (!msg || !msg.command) throw new Error('Invalid JSON')
+    // normalize command name for consistent handling
+    msg.command = String(msg.command).toLowerCase()
+    if (msg.command === 'repeat') msg.command = 'setrepeat'
     msg._isJson = true
     return msg
   } catch (e) {
@@ -50,12 +53,18 @@ const normalizeMessage = (data) => {
 
     // normalize aliases
     const low = msg.command.toLowerCase()
-    if (low === 'setrepeat' || low === 'set_repeat') msg.command = 'repeat'
-    if (low === 'get_repeat') msg.command = 'getrepeat'
+    if (low === 'setrepeat' || low === 'set_repeat' || low === 'repeat')
+      msg.command = 'setrepeat'
+    if (low === 'get_repeat' || low === 'getrepeat') msg.command = 'getrepeat'
 
     // map simple value into appropriate properties without side effects
     if (msg.value) {
       switch (msg.command.toLowerCase()) {
+        case 'setrepeat':
+        case 'repeat':
+          // support both aliases; set mode from simple value
+          msg.mode = msg.value ? msg.value : null
+          break
         case 'playfile':
           msg.file = msg.value
           break
@@ -74,9 +83,6 @@ const normalizeMessage = (data) => {
           msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
           break
         }
-        case 'repeat':
-          msg.mode = msg.value ? msg.value : null
-          break
         case 'setaudiodevice':
           msg.device = msg.value
           break
