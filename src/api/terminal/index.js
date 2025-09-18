@@ -139,24 +139,31 @@ const handleMessage = async (data) => {
     switch (command) {
       case 'play':
         play()
+        result = { command: 'play' }
         break
       case 'pause':
         pause()
+        result = { command: 'pause' }
         break
       case 'stop':
         stop()
+        result = { command: 'stop' }
         break
       case 'playfile':
         playFoundFile(message.file)
+        result = { command: 'playfile', file: message.file }
         break
       case 'playid':
         await playId(message.id)
+        result = { command: 'playid', id: message.id }
         break
       case 'next':
         await setNext()
+        result = { command: 'next' }
         break
       case 'prev':
         setPrevious()
+        result = { command: 'prev' }
         break
       case 'updatetime':
         if (message.time) {
