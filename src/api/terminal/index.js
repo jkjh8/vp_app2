@@ -17,6 +17,15 @@ import {
 import { playlistPlay } from '../playlists/index.js'
 import { dbFiles, dbPlaylists } from '../../db/index.js'
 
+// 파일 정보 간소화 함수 (ID와 이름만)
+const simplifyFileInfo = (file) => {
+  if (!file) return null
+  return {
+    id: file.id,
+    name: file.name,
+  }
+}
+
 const parseSimpleCommand = (data) => {
   // 간단한 command,value 형태 파싱
   const parts = data.trim().split(',')
@@ -124,50 +133,90 @@ const normalizeMessage = (data) => {
 const handleMessage = async (data) => {
   logger.info(`Received message: ${data}`)
   try {
-    let result = null
-    let message = null
-
     // parse/normalize incoming message (JSON or simple)
-    message = normalizeMessage(data)
+    const message = normalizeMessage(data)
     if (!message || !message.command) {
       throw new Error('Invalid message format')
     }
 
-    let command = message.command
-    console.log(`Command: ${command}`)
-    command = command.toLowerCase()
+    const command = message.command.toLowerCase()
+    logger.debug(`Processing command: ${command}`)
+
+    let result = null
     switch (command) {
       case 'play':
         play()
-        result = { command: 'play' }
+        result = {
+          command: 'play',
+          message: 'Command executed: play',
+        }
         break
       case 'pause':
         pause()
-        result = { command: 'pause' }
+        result = {
+          command: 'pause',
+          message: 'Command executed: pause',
+        }
         break
       case 'stop':
         stop()
-        result = { command: 'stop' }
+        result = {
+          command: 'stop',
+          message: 'Command executed: stop',
+        }
         break
       case 'playfile':
-        playFoundFile(message.file)
-        result = { command: 'playfile', file: message.file }
+        await playFoundFile(message.file)
+        result = {
+          command: 'playfile',
+          message: `Command executed: playfile ${message.file}`,
+        }
         break
       case 'playid':
         await playId(message.id)
-        result = { command: 'playid', id: message.id }
+        result = {
+          command: 'playid',
+          message: `Command executed: playid ${message.id}`,
+        }
         break
       case 'next':
         await setNext()
-        result = { command: 'next' }
+        result = {
+          command: 'next',
+          message: 'Moved to next track',
+          data: {
+            trackId: pStatus.trackId,
+            currentTrack: simplifyFileInfo(
+              pStatus.playlist.tracks?.[pStatus.trackId],
+            ),
+            playlistMode: pStatus.playlistMode,
+          },
+        }
         break
       case 'prev':
-        setPrevious()
-        result = { command: 'prev' }
+        await setPrevious()
+        result = {
+          command: 'prev',
+          message: 'Command executed: prev',
+        }
         break
       case 'updatetime':
-        if (message.time) {
+        if (message.time !== undefined) {
           updateTime(message.time)
+          result = {
+            command: 'updatetime',
+            message: `Time updated to ${message.time}ms`,
+            data: {
+              time: message.time,
+              playerState: pStatus.player,
+            },
+          }
+        } else {
+          result = {
+            command: 'updatetime',
+            message: 'Time parameter required',
+            data: { currentTime: pStatus.player.time },
+          }
         }
         break
       case 'fullscreen':
@@ -181,11 +230,20 @@ const handleMessage = async (data) => {
         // ensure boolean
         fs = Boolean(fs)
         await setFullscreen(fs)
-        result = { fullscreen: fs }
+        result = {
+          command: 'fullscreen',
+          message: `Fullscreen ${fs ? 'enabled' : 'disabled'}`,
+          data: { fullscreen: fs },
+        }
         break
       case 'togglefullscreen':
-        await setFullscreen(!pStatus.fullscreen)
-        result = { fullscreen: !pStatus.fullscreen }
+        const newFullscreenState = !pStatus.fullscreen
+        await setFullscreen(newFullscreenState)
+        result = {
+          command: 'togglefullscreen',
+          message: `Fullscreen ${newFullscreenState ? 'enabled' : 'disabled'}`,
+          data: { fullscreen: newFullscreenState },
+        }
         break
       case 'setrepeat':
         // check allowed modes based on playlistMode and validate requested mode
@@ -227,9 +285,22 @@ const handleMessage = async (data) => {
         }
         break
       case 'imagetime':
-        if (message.time) {
+        if (message.time !== undefined) {
           await setPlaylistImageTimeout(message.time)
-          result = { imageTime: pStatus.imageTime }
+          result = {
+            command: 'imagetime',
+            message: `Image time set to ${message.time} seconds`,
+            data: {
+              imageTime: pStatus.imageTime,
+              previousTime: message.time,
+            },
+          }
+        } else {
+          result = {
+            command: 'imagetime',
+            message: 'Time parameter required',
+            data: { currentImageTime: pStatus.imageTime },
+          }
         }
         break
       case 'playlistplay':
@@ -238,22 +309,84 @@ const handleMessage = async (data) => {
         }
         break
       case 'getfiles':
-        result = { files: await dbFiles.find() }
+        const files = await dbFiles.find()
+        result = {
+          command: 'getfiles',
+          message: `Found ${files.length} files`,
+          data: { files, count: files.length },
+        }
         break
       case 'getplaylists':
-        result = { playlists: await dbPlaylists.find() }
+        const playlists = await dbPlaylists.find()
+        result = {
+          command: 'getplaylists',
+          message: `Found ${playlists.length} playlists`,
+          data: { playlists, count: playlists.length },
+        }
         break
       case 'getplaylist':
         if (message.id) {
+          const playlist = await dbPlaylists.findOne({ playlistId: message.id })
           result = {
-            playlist: await dbPlaylists.findOne({ playlistId: message.id }),
+            command: 'getplaylist',
+            message: playlist
+              ? `Found playlist ${message.id}`
+              : `Playlist ${message.id} not found`,
+            data: { playlist, playlistId: message.id },
           }
+        } else {
+          result = {
+            command: 'getplaylist',
+            message: 'Playlist ID required',
+            data: { error: 'MISSING_PARAMETER', parameter: 'id' },
+          }
+        }
+        break
+      default:
+        result = {
+          command: command || 'unknown',
+          message: `Unknown command: ${command}`,
+          data: {
+            error: 'UNKNOWN_COMMAND',
+            availableCommands: [
+              'play',
+              'pause',
+              'stop',
+              'playid',
+              'playfile',
+              'next',
+              'prev',
+              'fullscreen',
+              'setrepeat',
+              'getrepeat',
+              'setaudiodevice',
+              'getaudiodevices',
+              'getaudiodevice',
+              'imagetime',
+              'updatetime',
+              'playlistplay',
+              'getfiles',
+              'getplaylists',
+              'getplaylist',
+            ],
+          },
         }
         break
     }
     return result
   } catch (error) {
     logger.error(`Error processing message: ${data}`, error)
+
+    // Return structured error response
+    return {
+      command: 'error',
+      message: `Command execution failed: ${error.message}`,
+      data: {
+        error: 'EXECUTION_ERROR',
+        originalMessage: data,
+        errorDetails: error.stack,
+      },
+    }
   }
 }
 

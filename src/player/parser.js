@@ -5,7 +5,8 @@ import { playerSend } from './index.js'
 import { dbStatus } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { app } from 'electron'
-import { broadcastTcpJson } from '../tcp/index.js'
+import { broadcastEvent } from '../tcp/index.js'
+import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
 
 function handleReady() {
   pStatus.ready = true
@@ -50,14 +51,14 @@ function handleEndReached() {
       if (pStatus.playlist.tracks.length > pStatus.trackId + 1) {
         pStatus.trackId += 1
         playFile(pStatus.playlist.tracks[pStatus.trackId])
-        broadcastTcpJson({ command: 'next', track: pStatus.trackId })
+        // 자동 플레이리스트 진행시에는 TCP 피드백 없음
       } else {
         stop()
-        broadcastTcpJson({ command: 'endReached' })
+        broadcastEvent(EVENTS.END_REACHED, {})
       }
     } else {
       stop()
-      broadcastTcpJson({ command: 'endReached' })
+      broadcastEvent(EVENTS.END_REACHED, {})
     }
   } else if (repeat === 'all') {
     if (playlistMode) {
@@ -67,7 +68,7 @@ function handleEndReached() {
         pStatus.trackId = 0
       }
       playFile(pStatus.playlist.tracks[pStatus.trackId])
-      broadcastTcpJson({ command: 'next', track: pStatus.trackId })
+      // 자동 플레이리스트 진행시에는 TCP 피드백 없음
     } else {
       stop()
       play()
@@ -77,7 +78,7 @@ function handleEndReached() {
     play()
   } else {
     stop()
-    broadcastTcpJson({ command: 'endReached' })
+    broadcastEvent(EVENTS.END_REACHED, {})
   }
 }
 
@@ -99,7 +100,7 @@ const parsePlayerStatus = async (data) => {
             { upsert: true },
           )
           ioClient.emit('pStatus', { imageTime: value })
-          broadcastTcpJson({ command: 'imagetime', time: value })
+          broadcastEvent(EVENTS.IMAGE_TIME_CHANGED, { time: value })
           logger.debug(`Image time set to: ${value}`)
           break
         case 'fullscreen':
@@ -111,17 +112,20 @@ const parsePlayerStatus = async (data) => {
             { upsert: true },
           )
           ioClient.emit('pStatus', { fullscreen: value })
-          broadcastTcpJson({ command: 'fullscreen', value })
+          broadcastEvent(EVENTS.FULLSCREEN_CHANGED, { value })
           break
         case 'status':
         case 'mediaPlayerStatus':
           pStatus.player = { ...pStatus.player, ...value }
           ioClient.emit('pStatus', { player: pStatus.player })
+          // TCP 이벤트는 전송하지 않음 (너무 빈번함)
           break
         case 'audioDevices':
           pStatus.audioDevices = value
           ioClient.emit('pStatus', { audioDevices: value })
-          broadcastTcpJson({ command: 'audioDevices', devices: value })
+          broadcastEvent(EVENTS.AUDIO_DEVICES_UPDATED, {
+            count: value?.length || 0,
+          })
           break
         case 'endReached':
           handleEndReached()

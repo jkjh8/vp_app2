@@ -13,6 +13,11 @@ import {
   showLogo,
   setLogoSize,
 } from '../../../api/player/index.js'
+import {
+  handleError,
+  handleSuccess,
+  asyncHandler,
+} from '../../../utils/errorHandler.js'
 
 const router = express.Router()
 
@@ -27,14 +32,13 @@ const uploader = multer({
   }),
 })
 
-router.get('/', async (req, res) => {
-  try {
-    res.json(await updateStatusFromDb())
-  } catch (error) {
-    logger.error(`Error updating status: ${error.message}`)
-    res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const result = await updateStatusFromDb()
+    res.json(result)
+  }),
+)
 
 router.post('/update', async (req, res) => {
   try {
@@ -55,28 +59,22 @@ router.post('/update', async (req, res) => {
   }
 })
 
-router.get('/image_time/:time', async (req, res) => {
-  try {
-    res.status(200).json({
-      result: true,
-      message: await setPlaylistImageTimeout(Number(req.params.time)),
-      pStatus,
-    })
-  } catch (error) {
-    logger.error(`Error setting image time: ${error.message}`)
-    res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+router.get(
+  '/image_time/:time',
+  asyncHandler(async (req, res) => {
+    const message = await setPlaylistImageTimeout(Number(req.params.time))
+    handleSuccess(res, { pStatus }, message)
+  }),
+)
 
 // logo functions
-router.get('/logo', async (req, res) => {
-  try {
-    res.status(200).json(await fs.promises.readdir(getLogoPath()))
-  } catch (error) {
-    logger.error(`Error getting logo: ${error.message}`)
-    res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+router.get(
+  '/logo',
+  asyncHandler(async (req, res) => {
+    const files = await fs.promises.readdir(getLogoPath())
+    res.status(200).json(files)
+  }),
+)
 
 router.post('/logo', uploader.any(), async (req, res) => {
   try {
@@ -106,11 +104,11 @@ router.get('/logo/img/:filename', (req, res) => {
 router.delete('/logo/:filename', async (req, res) => {
   const { filename } = req.params
   const filePath = path.join(getLogoPath(), decodeURIComponent(filename))
-  // 파일을 지울때 pStatus.logo.file == filename 이면 pStatus.logo.file = ''
-  if (pStatus.logo.file === decodeURIComponent(filename)) {
-    pStatus.logo.file = ''
+  // 파일을 지울때 pStatus.logoFile == filename 이면 pStatus.logoFile = ''
+  if (pStatus.logoFile === decodeURIComponent(filename)) {
+    pStatus.logoFile = ''
     //db에서도 삭제
-    await dbStatus.update({ type: 'logo' }, { $set: { file: '' } })
+    await dbStatus.update({ type: 'logoFile' }, { $set: { file: '' } })
   }
 
   fs.unlink(filePath, (err) => {

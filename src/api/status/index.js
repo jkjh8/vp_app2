@@ -1,5 +1,6 @@
 import { dbStatus } from '../../db/index.js'
 import pStatus from '../../pStatus.js'
+import { logger } from '../../logger/index.js'
 
 const updateStatusFromDb = async () => {
   const st = await dbStatus.find({})
@@ -33,7 +34,7 @@ const updateStatusFromDb = async () => {
         pStatus.startOnPlaylistId = status.playlistId
         break
       default:
-        console.warn(`Unknown status type: ${status.type}`)
+        logger.warn(`Unknown status type: ${status.type}`)
     }
   }
 }

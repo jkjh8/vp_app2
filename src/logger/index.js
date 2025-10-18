@@ -34,10 +34,7 @@ const initLogger = () => {
     ),
     transports: [
       new winston.transports.Console({
-        format: combine(
-          colorize({ all: true }),
-          timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        ),
+        format: combine(colorize({ all: true })),
       }),
       new DailyRotateFile({
         filename: path.join(logDir, 'application-%DATE%.log'),

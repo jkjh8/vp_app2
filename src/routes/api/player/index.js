@@ -60,7 +60,6 @@ router.get('/pause/:id', async (req, res) => {
 router.get('/fullscreen/:value', async (req, res) => {
   try {
     const value = req.params.value.toLowerCase()
-    console.log('Fullscreen value:', value)
     if (value !== 'true' && value !== 'false') {
       return res.status(400).json({ error: 'Invalid value for fullscreen' })
     }

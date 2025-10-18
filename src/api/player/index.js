@@ -6,6 +6,8 @@ import { getLogoPath } from '../files/folders.js'
 import { playerSend } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
+import { broadcastEvent } from '../../tcp/index.js'
+import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
 const setMedia = async (id) => {
   logger.info(`Setting media with ID: ${id}`)
@@ -33,6 +35,10 @@ const playId = async (id) => {
     mimetype: file.mimetype,
     time: file.time,
   })
+  broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+    fileId: file.number,
+    filename: file.filename,
+  })
   return `Playing file: ${file.path}`
 }
 
@@ -46,6 +52,10 @@ const playFile = async (file) => {
     })
     pStatus.file = file
     ioClient.emit('pStatus', { file: pStatus.file })
+    broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+      fileId: file.number,
+      filename: file.filename,
+    })
     return `Playing file: ${file.path}`
   } catch (error) {
     logger.error(`Error playing file: ${error.message}`)
@@ -69,18 +79,26 @@ const playFoundFile = async (text) => {
 const play = () => {
   logger.info('Received play request without ID')
   playerSend({ command: 'play' })
+  broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+    fileId: pStatus.file?.number || null,
+    filename: pStatus.file?.filename || null,
+  })
   return 'Playing without ID'
 }
 
 const pause = () => {
   logger.info('Received pause request')
   playerSend({ command: 'pause' })
+  broadcastEvent(TCP_EVENTS.PLAY_PAUSED, {
+    fileId: pStatus.file?.number || null,
+  })
   return 'Player paused'
 }
 
 const stop = () => {
   logger.info('Received stop request')
   playerSend({ command: 'stop' })
+  broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
   return 'Player stopped'
 }
 
@@ -205,6 +223,10 @@ const setNext = async () => {
     }
     playFile(pStatus.playlist.tracks[pStatus.trackId])
     ioClient.emit('pStatus', { trackId: pStatus.trackId })
+    broadcastEvent(TCP_EVENTS.NEXT_TRACK, {
+      trackId: pStatus.trackId,
+      filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
+    })
   }
   return 'Next track set'
 }
@@ -215,6 +237,10 @@ const setPrevious = async () => {
     if (pStatus.player.time < 5000) {
       if (pStatus.trackId > 0) {
         pStatus.trackId -= 1
+        broadcastEvent(TCP_EVENTS.PREV_TRACK, {
+          trackId: pStatus.trackId,
+          filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
+        })
         return playFile(pStatus.playlist.tracks[pStatus.trackId])
       }
     }
