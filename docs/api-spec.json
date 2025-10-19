@@ -1,0 +1,301 @@
+{
+  "info": {
+    "title": "VP App2 API",
+    "version": "0.1.5",
+    "description": "미디어 파일 재생 및 플레이리스트 관리 API",
+    "contact": {
+      "name": "jkjh8",
+      "url": "https://github.com/jkjh8"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local Development Server"
+    }
+  ],
+  "endpoints": {
+    "player": {
+      "play": {
+        "method": "GET",
+        "path": "/api/player/play",
+        "description": "재생 시작 또는 재개",
+        "response": {
+          "message": "play ok"
+        }
+      },
+      "pause": {
+        "method": "GET",
+        "path": "/api/player/pause",
+        "description": "일시정지",
+        "response": {
+          "message": "pause ok"
+        }
+      },
+      "stop": {
+        "method": "GET",
+        "path": "/api/player/stop",
+        "description": "정지",
+        "response": {
+          "message": "stop ok"
+        }
+      },
+      "playid": {
+        "method": "GET",
+        "path": "/api/player/playid/:id",
+        "description": "파일 ID로 재생",
+        "params": {
+          "id": "number"
+        },
+        "response": {
+          "message": "Playing file: /path/to/file.mp4"
+        }
+      },
+      "next": {
+        "method": "GET",
+        "path": "/api/player/next",
+        "description": "다음 트랙",
+        "response": {
+          "message": "next ok"
+        }
+      },
+      "prev": {
+        "method": "GET",
+        "path": "/api/player/prev",
+        "description": "이전 트랙",
+        "response": {
+          "message": "previous ok"
+        }
+      },
+      "fullscreen": {
+        "method": "GET",
+        "path": "/api/player/fullscreen/:value",
+        "description": "전체화면 설정",
+        "params": {
+          "value": "boolean (true|false)"
+        },
+        "response": {
+          "message": "Set fullscreen to true"
+        }
+      },
+      "repeat": {
+        "method": "POST",
+        "path": "/api/player/repeat",
+        "description": "반복 모드 설정",
+        "body": {
+          "mode": "none | all | repeat_one"
+        },
+        "response": {
+          "result": true,
+          "repeat": "all"
+        }
+      }
+    },
+    "files": {
+      "list": {
+        "method": "GET",
+        "path": "/api/files",
+        "description": "파일 목록 조회",
+        "response": {
+          "result": true,
+          "files": [],
+          "count": 0
+        }
+      },
+      "add": {
+        "method": "POST",
+        "path": "/api/files",
+        "description": "파일 추가",
+        "body": {
+          "files": [
+            {
+              "filename": "string",
+              "path": "string",
+              "mimetype": "string"
+            }
+          ]
+        },
+        "response": {
+          "result": true,
+          "message": "Files added successfully"
+        }
+      },
+      "delete": {
+        "method": "DELETE",
+        "path": "/api/files/:id",
+        "description": "파일 삭제",
+        "params": {
+          "id": "string"
+        },
+        "response": {
+          "result": true,
+          "message": "File deleted successfully"
+        }
+      }
+    },
+    "playlists": {
+      "list": {
+        "method": "GET",
+        "path": "/api/playlists",
+        "description": "플레이리스트 목록 조회",
+        "response": {
+          "result": true,
+          "playlists": []
+        }
+      },
+      "create": {
+        "method": "POST",
+        "path": "/api/playlists",
+        "description": "플레이리스트 생성",
+        "body": {
+          "name": "string",
+          "tracks": []
+        },
+        "response": {
+          "result": true,
+          "message": "Playlist created successfully",
+          "playlistId": "string"
+        }
+      },
+      "play": {
+        "method": "GET",
+        "path": "/api/playlists/:id/play/:track?",
+        "description": "플레이리스트 재생",
+        "params": {
+          "id": "string",
+          "track": "number (optional)"
+        },
+        "response": {
+          "result": true,
+          "message": "Playlist playing"
+        }
+      },
+      "delete": {
+        "method": "DELETE",
+        "path": "/api/playlists/:id",
+        "description": "플레이리스트 삭제",
+        "params": {
+          "id": "string"
+        },
+        "response": {
+          "result": true,
+          "message": "Playlist deleted successfully"
+        }
+      }
+    },
+    "status": {
+      "get": {
+        "method": "GET",
+        "path": "/api/status",
+        "description": "플레이어 상태 조회",
+        "response": {
+          "result": true,
+          "pStatus": {
+            "player": {},
+            "file": {},
+            "playlistMode": false,
+            "playlist": {},
+            "trackId": 0,
+            "repeat": "none",
+            "fullscreen": false
+          }
+        }
+      }
+    }
+  },
+  "tcp": {
+    "server": "localhost:12345",
+    "protocol": "JSON over TCP",
+    "commands": [
+      "play",
+      "pause",
+      "stop",
+      "playid",
+      "playfile",
+      "next",
+      "prev",
+      "fullscreen",
+      "setrepeat",
+      "getrepeat",
+      "setaudiodevice",
+      "getaudiodevices",
+      "getaudiodevice",
+      "imagetime",
+      "updatetime",
+      "playlistplay",
+      "getfiles",
+      "getplaylists",
+      "getplaylist"
+    ],
+    "events": [
+      "playStarted",
+      "playPaused",
+      "playStopped",
+      "nextTrack",
+      "prevTrack",
+      "endReached",
+      "fullscreenChanged",
+      "audioDevicesUpdated",
+      "imageTimeChanged"
+    ]
+  },
+  "websocket": {
+    "url": "ws://localhost:3000",
+    "namespaces": {
+      "client": {
+        "path": "/client",
+        "events": ["pStatus", "files", "playlists"]
+      },
+      "player": {
+        "path": "/player",
+        "events": ["command", "response"]
+      }
+    }
+  },
+  "models": {
+    "File": {
+      "number": "number",
+      "id": "string (uuid)",
+      "filename": "string",
+      "path": "string",
+      "mimetype": "string",
+      "size": "number",
+      "duration": "number (optional)",
+      "createdAt": "string (ISO 8601)",
+      "updatedAt": "string (ISO 8601)"
+    },
+    "Playlist": {
+      "playlistId": "string (uuid)",
+      "name": "string",
+      "tracks": "Array<Track>",
+      "createdAt": "string (ISO 8601)",
+      "updatedAt": "string (ISO 8601)"
+    },
+    "Track": {
+      "id": "string (uuid)",
+      "name": "string",
+      "path": "string (optional)"
+    },
+    "PlayerStatus": {
+      "player": {
+        "state": "string (playing|paused|stopped)",
+        "time": "number (milliseconds)",
+        "duration": "number (milliseconds)",
+        "volume": "number (0-100)"
+      },
+      "file": "File | null",
+      "playlistMode": "boolean",
+      "playlist": "Playlist | null",
+      "trackId": "number",
+      "repeat": "string (none|all|repeat_one)",
+      "fullscreen": "boolean",
+      "audioDevice": "string",
+      "audioDevices": "Array<string>",
+      "imageTime": "number (seconds)"
+    }
+  }
+}
