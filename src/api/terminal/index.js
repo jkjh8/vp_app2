@@ -14,7 +14,7 @@ import {
   setFullscreen,
   setRepeat,
 } from '../player/index.js'
-import { playlistPlay } from '../playlists/index.js'
+import { playlistPlay, getPlaylists, getPlaylist } from '../playlists/index.js'
 import db, { dbFiles, dbPlaylists } from '../../db/index.js'
 
 // 파일 정보 간소화 함수 (ID와 이름만)
@@ -24,6 +24,34 @@ const simplifyFileInfo = (file) => {
     id: file.id,
     name: file.name,
     type: file.type,
+  }
+}
+
+// 플레이리스트 트랙 정보 간소화 함수
+const simplifyTrackInfo = (track) => {
+  if (!track) return null
+  return {
+    uuid: track.uuid,
+    amx: track.amx,
+    filename: track.filename || track.originalname,
+    time: track.time || 0,
+    mimetype: track.mimetype,
+    duration: track.metadata?.format?.duration,
+    size: track.size,
+    is_image: track.is_image || false,
+  }
+}
+
+// 플레이리스트 정보 간소화 함수
+const simplifyPlaylistInfo = (playlist) => {
+  if (!playlist) return null
+  return {
+    playlistId: playlist.playlistId,
+    name: playlist.name,
+    description: playlist.description,
+    tracks: playlist.tracks?.map(simplifyTrackInfo) || [],
+    createdAt: playlist.createdAt,
+    updatedAt: playlist.updatedAt,
   }
 }
 
@@ -112,6 +140,9 @@ const normalizeMessage = (data) => {
         msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
         break
       }
+      case 'getplaylist':
+        msg.id = parseIntOrValue(msg.value)
+        break
       case 'setaudiodevice':
         msg.device = msg.value
         break
@@ -318,27 +349,25 @@ const handleMessage = async (data) => {
         }
         break
       case 'getplaylists':
-        const playlists = await dbPlaylists.find()
+        const playlists = await getPlaylists()
         result = {
           command: 'getplaylists',
           message: `Found ${playlists.length} playlists`,
-          data: { playlists, count: playlists.length },
+          data: {
+            playlists: playlists.map(simplifyPlaylistInfo),
+            count: playlists.length,
+          },
         }
         break
       case 'getplaylist':
         if (message.id) {
-          const playlist = await dbPlaylists.findOne({ playlistId: message.id })
-
-          const playlistTracks = []
-          for (const file of playlist.tracks) {
-            playlistTracks.push(await dbFiles.findOne({ uuid: file.uuid }))
-          }
+          const playlist = await getPlaylist(message.id)
           result = {
             command: 'getplaylist',
             message: playlist
               ? `Found playlist ${message.id}`
               : `Playlist ${message.id} not found`,
-            data: { playlistTracks, playlistId: message.id },
+            data: { playlist: simplifyPlaylistInfo(playlist) },
           }
         } else {
           result = {

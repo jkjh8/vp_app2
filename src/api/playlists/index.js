@@ -10,17 +10,28 @@ const getTrackWithFileInfo = async (tracks) => {
     logger.error('Invalid tracks data')
     return []
   }
-  return await Promise.all(
+
+  const results = await Promise.all(
     tracks.map(async (track) => {
-      const file = await dbFiles.findOne({ uuid: track.uuid })
-      if (file) {
-        return {
-          ...file,
-          time: track.time || 0,
+      try {
+        const file = await dbFiles.findOne({ uuid: track.uuid })
+        if (file) {
+          return {
+            ...file,
+            time: track.time || 0,
+          }
         }
+        logger.warn(`File not found for track uuid: ${track.uuid}`)
+        return null
+      } catch (error) {
+        logger.error(`Error fetching file for track uuid ${track.uuid}:`, error)
+        return null
       }
     }),
   )
+
+  // Filter out null/undefined values
+  return results.filter((item) => item !== null && item !== undefined)
 }
 
 const getPlaylist = async (playlistId) => {
@@ -45,10 +56,12 @@ const getPlaylist = async (playlistId) => {
 const getPlaylists = async () => {
   try {
     const playlists = await dbPlaylists.find({})
-    for (const playlist of playlists) {
-      playlist.tracks = await getTrackWithFileInfo(playlist.tracks)
-    }
-    return playlists
+    return await Promise.all(
+      playlists.map(async (playlist) => ({
+        ...playlist,
+        tracks: await getTrackWithFileInfo(playlist.tracks),
+      })),
+    )
   } catch (error) {
     logger.error('Error fetching playlists:', error)
     return []
