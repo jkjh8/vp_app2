@@ -15,7 +15,7 @@ import {
   setRepeat,
 } from '../player/index.js'
 import { playlistPlay } from '../playlists/index.js'
-import { dbFiles, dbPlaylists } from '../../db/index.js'
+import db, { dbFiles, dbPlaylists } from '../../db/index.js'
 
 // 파일 정보 간소화 함수 (ID와 이름만)
 const simplifyFileInfo = (file) => {
@@ -23,6 +23,7 @@ const simplifyFileInfo = (file) => {
   return {
     id: file.id,
     name: file.name,
+    type: file.type,
   }
 }
 
@@ -327,12 +328,17 @@ const handleMessage = async (data) => {
       case 'getplaylist':
         if (message.id) {
           const playlist = await dbPlaylists.findOne({ playlistId: message.id })
+
+          const playlistTracks = []
+          for (const file of playlist.tracks) {
+            playlistTracks.push(await dbFiles.findOne({ uuid: file.uuid }))
+          }
           result = {
             command: 'getplaylist',
             message: playlist
               ? `Found playlist ${message.id}`
               : `Playlist ${message.id} not found`,
-            data: { playlist, playlistId: message.id },
+            data: { playlistTracks, playlistId: message.id },
           }
         } else {
           result = {

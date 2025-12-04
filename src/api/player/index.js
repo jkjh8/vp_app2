@@ -52,9 +52,11 @@ const playFile = async (file) => {
     })
     pStatus.file = file
     ioClient.emit('pStatus', { file: pStatus.file })
+    // playlist 모드일때 trackid 추가
     broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
       fileId: file.number,
       filename: file.filename,
+      trackId: pStatus.trackId,
     })
     return `Playing file: ${file.path}`
   } catch (error) {
