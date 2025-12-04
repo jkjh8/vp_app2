@@ -28,9 +28,10 @@ const simplifyFileInfo = (file) => {
 }
 
 // 플레이리스트 트랙 정보 간소화 함수
-const simplifyTrackInfo = (track) => {
+const simplifyTrackInfo = (track, index) => {
   if (!track) return null
   return {
+    trackId: index,
     uuid: track.uuid,
     amx: track.amx,
     filename: track.filename || track.originalname,
@@ -49,7 +50,9 @@ const simplifyPlaylistInfo = (playlist) => {
     playlistId: playlist.playlistId,
     name: playlist.name,
     description: playlist.description,
-    tracks: playlist.tracks?.map(simplifyTrackInfo) || [],
+    tracks:
+      playlist.tracks?.map((track, index) => simplifyTrackInfo(track, index)) ||
+      [],
     createdAt: playlist.createdAt,
     updatedAt: playlist.updatedAt,
   }
@@ -135,9 +138,11 @@ const normalizeMessage = (data) => {
         msg.time = parseIntOrValue(msg.value)
         break
       case 'playlistplay': {
-        const parts = msg.value.split(',')
-        msg.id = parseIntOrValue(parts[0])
-        msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
+        if (msg.value) {
+          const parts = msg.value.split(',')
+          msg.id = parseIntOrValue(parts[0])
+          msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
+        }
         break
       }
       case 'getplaylist':
@@ -216,13 +221,6 @@ const handleMessage = async (data) => {
         result = {
           command: 'next',
           message: 'Moved to next track',
-          data: {
-            trackId: pStatus.trackId,
-            currentTrack: simplifyFileInfo(
-              pStatus.playlist.tracks?.[pStatus.trackId],
-            ),
-            playlistMode: pStatus.playlistMode,
-          },
         }
         break
       case 'prev':

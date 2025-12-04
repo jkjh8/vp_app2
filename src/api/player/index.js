@@ -226,6 +226,7 @@ const setNext = async () => {
     playFile(pStatus.playlist.tracks[pStatus.trackId])
     ioClient.emit('pStatus', { trackId: pStatus.trackId })
     broadcastEvent(TCP_EVENTS.NEXT_TRACK, {
+      playlistId: pStatus.playlist.playlistId,
       trackId: pStatus.trackId,
       filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
     })
@@ -240,6 +241,7 @@ const setPrevious = async () => {
       if (pStatus.trackId > 0) {
         pStatus.trackId -= 1
         broadcastEvent(TCP_EVENTS.PREV_TRACK, {
+          playlistId: pStatus.playlist.playlistId,
           trackId: pStatus.trackId,
           filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
         })
