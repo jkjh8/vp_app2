@@ -16,7 +16,7 @@ const setMedia = async (id) => {
     throw new Error('File not found')
   }
   setPlaylistMode(false)
-  playerSend({ command: 'mediaSet', file: file.path, mimetype: file.mimetype })
+  playerSend({ command: 'set_media', file, idx: 0 })
   return `Media set to: ${file.path}`
 }
 
@@ -30,10 +30,8 @@ const playId = async (id) => {
   ioClient.emit('pStatus', { file: pStatus.file })
   setPlaylistMode(false)
   playerSend({
-    command: 'playId',
-    file: file.path,
-    mimetype: file.mimetype,
-    time: file.time,
+    command: 'playid',
+    file,
   })
   broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
     fileId: file.number,
@@ -45,10 +43,8 @@ const playId = async (id) => {
 const playFile = async (file) => {
   try {
     playerSend({
-      command: 'playId',
-      file: file.path,
-      mimetype: file.mimetype,
-      time: file.time,
+      command: 'playid',
+      file,
     })
     pStatus.file = file
     ioClient.emit('pStatus', { file: pStatus.file })
@@ -80,7 +76,7 @@ const playFoundFile = async (text) => {
 
 const play = () => {
   logger.info('Received play request without ID')
-  playerSend({ command: 'play' })
+  playerSend({ command: 'play', idx: 0 })
   broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
     fileId: pStatus.file?.number || null,
     filename: pStatus.file?.filename || null,
@@ -90,7 +86,7 @@ const play = () => {
 
 const pause = () => {
   logger.info('Received pause request')
-  playerSend({ command: 'pause' })
+  playerSend({ command: 'pause', idx: 0 })
   broadcastEvent(TCP_EVENTS.PLAY_PAUSED, {
     fileId: pStatus.file?.number || null,
   })
@@ -99,19 +95,19 @@ const pause = () => {
 
 const stop = () => {
   logger.info('Received stop request')
-  playerSend({ command: 'stop' })
+  playerSend({ command: 'stop', idx: 0 })
   broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
   return 'Player stopped'
 }
 
 const updateTime = (time) => {
-  playerSend({ command: 'setTime', time })
+  playerSend({ command: 'set_time', time, idx: 0 })
   return `Time updated to: ${time}`
 }
 
 const setFullscreen = async (value) => {
   value = value !== undefined ? value : pStatus.fullscreen
-  playerSend({ command: 'fullscreen', value: value })
+  playerSend({ command: 'set_fullscreen', value })
   return `Fullscreen mode set`
 }
 
@@ -123,7 +119,8 @@ const setLogoFile = async (logo) => {
     { $set: { file: filePath } },
     { upsert: true },
   )
-  playerSend({ command: 'setLogo', file: filePath, size: pStatus.logoSize })
+  playerSend({ command: 'logo_file', file: filePath })
+  playerSend({ command: 'logo_size', size: pStatus.logoSize })
   ioClient.emit('pStatus', { logoFile: pStatus.logoFile })
   return `Logo set to: ${logo}`
 }
@@ -135,7 +132,7 @@ const showLogo = async (show) => {
     { $set: { value: show } },
     { upsert: true },
   )
-  playerSend({ command: 'showLogo', show: show })
+  playerSend({ command: 'show_logo', show })
   ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
   return `Logo visibility set to: ${show}`
 }
@@ -147,11 +144,7 @@ const setLogoSize = async (size) => {
     { $set: { value: size } },
     { upsert: true },
   )
-  playerSend({
-    command: 'setLogo',
-    file: pStatus.logoFile,
-    size: pStatus.logoSize,
-  })
+  playerSend({ command: 'logo_size', size: pStatus.logoSize })
   ioClient.emit('pStatus', { logoSize: pStatus.logoSize })
   return `Logo size set to: ${size}`
 }
@@ -167,7 +160,7 @@ const setBackground = async (background) => {
     { $set: { value: background } },
     { upsert: true },
   )
-  playerSend({ command: 'setBackgroundColor', color: background })
+  playerSend({ command: 'background_color', color: background })
   ioClient.emit('pStatus', { backgroundColor: pStatus.backgroundColor })
   return `Background set to: ${background}`
 }
@@ -187,14 +180,14 @@ const setAudioDevice = async (deviceId) => {
     { $set: { audioDevice: deviceId } },
     { upsert: true },
   )
-  playerSend({ command: 'setAudioOutput', deviceId: pStatus.audioDevice })
+  playerSend({ command: 'set_audio_device', device_id: pStatus.audioDevice })
   ioClient.emit('pStatus', { audioDevice: pStatus.audioDevice })
   return `Audio device set to: ${deviceId}`
 }
 
 const setPlaylistImageTimeout = async (time) => {
   logger.info(`Setting image time to: ${time}`)
-  playerSend({ command: 'setPlaylistImageTime', time })
+  playerSend({ command: 'image_time', time })
   await dbStatus.update({ type: 'imageTime' }, { time })
   ioClient.emit('pStatus', { imageTime: time })
   return `Image time set to: ${time}`

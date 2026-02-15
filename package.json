@@ -29,8 +29,28 @@
     },
     "extraFiles": [
       {
-        "from": "src/player/lib",
-        "to": "player"
+        "from": "player_python/.venv",
+        "to": "player/.venv",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/*.pyd",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/pip/**",
+          "!**/setuptools/**",
+          "!**/wheel/**"
+        ]
+      },
+      {
+        "from": "player_python/player.py",
+        "to": "player/player.py"
+      },
+      {
+        "from": "player_python/requirements.txt",
+        "to": "player/requirements.txt"
       }
     ],
     "win": {

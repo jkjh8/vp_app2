@@ -13,6 +13,11 @@ let tcpClients = []
 let responseSender = null
 
 function startTcpServer(port = pStatus.tcpPort) {
+  if (tcpServer) {
+    logger.warn('TCP server is already running')
+    return
+  }
+
   // Initialize response sender
   responseSender = new TcpResponseSender(tcpClients)
 
@@ -29,7 +34,7 @@ function startTcpServer(port = pStatus.tcpPort) {
       'Connected to VP Server',
       {
         serverId: 'vp_app2',
-        version: '0.1.5',
+        version: '0.1.8',
         clientId,
         capabilities: ['player', 'playlist', 'files', 'status'],
       },
@@ -98,7 +103,26 @@ function startTcpServer(port = pStatus.tcpPort) {
     })
   })
 
-  tcpServer.listen(port, () => {
+  tcpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(`TCP port ${port} is already in use. Trying alternative port...`)
+      // 다른 포트로 재시도 (원래 포트 + 1)
+      const altPort = port + 1
+      logger.info(`Attempting to start TCP server on port ${altPort}`)
+      pStatus.tcpPort = altPort
+      tcpServer = null
+      setTimeout(() => startTcpServer(altPort), 1000)
+    } else if (err.code === 'EACCES') {
+      logger.error(`Permission denied for TCP port ${port}. TCP server disabled.`)
+      logger.info('Application will continue without TCP server functionality.')
+      tcpServer = null
+    } else {
+      logger.error(`TCP server error:`, err)
+      tcpServer = null
+    }
+  })
+
+  tcpServer.listen(port, '0.0.0.0', () => {
     logger.info(`TCP server listening on port ${port}`)
   })
 }

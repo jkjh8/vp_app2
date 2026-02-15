@@ -23,6 +23,7 @@ let pStatus = {
     duration: 0,
     time: 0,
   },
+  activePlayerId: 0,
   fullscreen: false,
   backgroundColor: '#000000',
 }

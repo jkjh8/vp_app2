@@ -158,7 +158,7 @@ const setPlaylistTrackIndex = async (idx) => {
 const setPlaylistMode = async (mode) => {
   try {
     pStatus.playlistMode = Boolean(mode)
-    playerSend({ command: 'setPlaylistMode', value: pStatus.playlistMode })
+    playerSend({ command: 'playlist_mode', value: pStatus.playlistMode })
 
     // If we're turning playlist mode OFF and repeat was 'repeat_one', switch to 'all'
     if (!pStatus.playlistMode && pStatus.repeat === 'repeat_one') {
@@ -239,7 +239,13 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       playlist: pStatus.playlist,
       trackId: pStatus.trackId,
     })
-    playFile(pStatus.playlist.tracks[pStatus.trackId])
+
+    // Send tracks to Python player
+    playerSend({ command: 'set_tracks', tracks: pStatus.playlist.tracks })
+
+    // Start playlist playback
+    playerSend({ command: 'playlist_play', idx: pStatus.trackId })
+
     return `Playing playlist ${playlistId} from track ${pStatus.trackId}`
   } catch (error) {
     logger.error(`Error playing playlist: ${error}`)

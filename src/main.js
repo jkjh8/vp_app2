@@ -30,7 +30,15 @@ if (!gotTheLock) {
     logger.debug('Status updated from database')
     setupFFmpeg()
     initWebServer()
-    startTcpServer()
+    
+    // TCP 서버는 선택적으로 시작 (실패해도 앱 계속 실행)
+    try {
+      startTcpServer()
+    } catch (error) {
+      logger.error('Failed to start TCP server:', error)
+      logger.info('Application will continue without TCP terminal functionality')
+    }
+    
     startPlayer()
   })
 }
