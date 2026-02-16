@@ -120,6 +120,23 @@ const connectToPlayer = () => {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+
+    // Check for auto-start playlist
+    if (pStatus.startOnPlay && pStatus.startOnPlaylistId) {
+      logger.info(
+        `Auto-starting playlist ${pStatus.startOnPlaylistId} (Boot on Play enabled)`,
+      )
+      // Import playlistPlay dynamically to avoid circular dependency
+      import('../api/playlists/index.js')
+        .then(({ playlistPlay }) => {
+          setTimeout(() => {
+            playlistPlay(pStatus.startOnPlaylistId, 0)
+          }, 1000) // 1초 대기 후 실행 (플레이어 초기화 완료 대기)
+        })
+        .catch((error) => {
+          logger.error(`Failed to auto-start playlist: ${error}`)
+        })
+    }
   })
 
   let buffer = ''

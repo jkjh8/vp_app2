@@ -8,14 +8,13 @@ import {
   setPrevious,
   playFoundFile,
   setAudioDevice,
-  setPlaylistImageTimeout,
   updateTime,
   pause,
   setFullscreen,
   setRepeat,
 } from '../player/index.js'
 import { playlistPlay, getPlaylists, getPlaylist } from '../playlists/index.js'
-import db, { dbFiles, dbPlaylists } from '../../db/index.js'
+import db, { dbFiles, dbPlaylists, dbStatus } from '../../db/index.js'
 
 // 파일 정보 간소화 함수 (ID와 이름만)
 const simplifyFileInfo = (file) => {
@@ -134,9 +133,6 @@ const normalizeMessage = (data) => {
       case 'updatetime':
         msg.time = parseIntOrValue(msg.value)
         break
-      case 'imagetime':
-        msg.time = parseIntOrValue(msg.value)
-        break
       case 'playlistplay': {
         if (msg.value) {
           const parts = msg.value.split(',')
@@ -159,6 +155,18 @@ const normalizeMessage = (data) => {
           msg.fullscreen = parseBool(msg.value)
         }
         break
+      case 'startonplay':
+      case 'setstartonplay': {
+        // startonplay,true,123 or startonplay,false
+        if (msg.value) {
+          const parts = msg.value.split(',')
+          msg.enabled = parseBool(parts[0])
+          if (parts.length > 1) {
+            msg.playlistId = parseIntOrValue(parts[1])
+          }
+        }
+        break
+      }
       default:
         // leave as-is; many commands have no mapped value
         break
@@ -314,25 +322,6 @@ const handleMessage = async (data) => {
           result = { device: pStatus.audioDevice }
         }
         break
-      case 'imagetime':
-        if (message.time !== undefined) {
-          await setPlaylistImageTimeout(message.time)
-          result = {
-            command: 'imagetime',
-            message: `Image time set to ${message.time} seconds`,
-            data: {
-              imageTime: pStatus.imageTime,
-              previousTime: message.time,
-            },
-          }
-        } else {
-          result = {
-            command: 'imagetime',
-            message: 'Time parameter required',
-            data: { currentImageTime: pStatus.imageTime },
-          }
-        }
-        break
       case 'playlistplay':
         if (message.id) {
           playlistPlay(message.id, message.track || 0)
@@ -375,6 +364,69 @@ const handleMessage = async (data) => {
           }
         }
         break
+      case 'startonplay':
+      case 'setstartonplay':
+        if (message.enabled !== undefined) {
+          // Update startOnPlay setting
+          const enabled = Boolean(message.enabled)
+          pStatus.startOnPlay = enabled
+          await dbStatus.update(
+            { type: 'startOnPlay' },
+            { $set: { value: enabled } },
+            { upsert: true },
+          )
+
+          // Update playlist ID if provided
+          if (enabled && message.playlistId !== undefined) {
+            const playlistId = Number(message.playlistId)
+            if (!isNaN(playlistId)) {
+              pStatus.startOnPlaylistId = playlistId
+              await dbStatus.update(
+                { type: 'startOnPlaylistId' },
+                { $set: { playlistId } },
+                { upsert: true },
+              )
+              result = {
+                command: 'startonplay',
+                message: `Start on play enabled with playlist ${playlistId}`,
+                data: { enabled, playlistId },
+              }
+            } else {
+              result = {
+                command: 'startonplay',
+                message: 'Invalid playlist ID',
+                data: { error: 'INVALID_PLAYLIST_ID' },
+              }
+            }
+          } else {
+            result = {
+              command: 'startonplay',
+              message: `Start on play ${enabled ? 'enabled' : 'disabled'}`,
+              data: { enabled, playlistId: pStatus.startOnPlaylistId },
+            }
+          }
+        } else {
+          // Return current settings
+          result = {
+            command: 'startonplay',
+            message: 'Current start on play settings',
+            data: {
+              enabled: pStatus.startOnPlay,
+              playlistId: pStatus.startOnPlaylistId,
+            },
+          }
+        }
+        break
+      case 'getstartonplay':
+        result = {
+          command: 'getstartonplay',
+          message: 'Current start on play settings',
+          data: {
+            enabled: pStatus.startOnPlay,
+            playlistId: pStatus.startOnPlaylistId,
+          },
+        }
+        break
       default:
         result = {
           command: command || 'unknown',
@@ -395,12 +447,13 @@ const handleMessage = async (data) => {
               'setaudiodevice',
               'getaudiodevices',
               'getaudiodevice',
-              'imagetime',
               'updatetime',
               'playlistplay',
               'getfiles',
               'getplaylists',
               'getplaylist',
+              'startonplay',
+              'getstartonplay',
             ],
           },
         }

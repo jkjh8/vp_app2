@@ -88,6 +88,68 @@ router.get('/download/:uuid', async (req, res) => {
   }
 })
 
+// 파일 ID 중복 검사
+router.get('/check-id/:id', async (req, res) => {
+  const { id } = req.params
+  try {
+    // ID가 숫자이거나 문자열일 수 있음
+    const existingFile = await dbFiles.findOne({ id: id })
+    res.status(200).json({ exists: !!existingFile, id })
+  } catch (error) {
+    logger.error(`Error checking file ID: ${error}`)
+    res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+// 파일 ID 변경
+router.put('/:uuid/id', async (req, res) => {
+  const { uuid } = req.params
+  const { newId } = req.body
+
+  try {
+    if (!newId) {
+      return res.status(400).json({ error: 'New ID is required' })
+    }
+
+    // ID 형식 검증: 영문, 숫자, 언더스코어, 하이폰 허용
+    const idRegex = /^[a-zA-Z0-9_-]+$/
+    if (!idRegex.test(newId)) {
+      return res.status(400).json({
+        error:
+          'Invalid ID format. Only alphanumeric characters, underscores, and hyphens are allowed.',
+      })
+    }
+
+    // 현재 파일 찾기
+    const currentFile = await dbFiles.findOne({ uuid })
+    if (!currentFile) {
+      return res.status(404).json({ error: 'File not found' })
+    }
+
+    // 중복 검사
+    const existingFile = await dbFiles.findOne({ id: newId })
+    if (existingFile && existingFile.uuid !== uuid) {
+      return res.status(409).json({ error: 'ID already exists' })
+    }
+
+    // ID 업데이트
+    await dbFiles.update({ uuid }, { $set: { id: newId } }, {})
+
+    logger.info(
+      `File ID updated: ${currentFile.id || currentFile.number} -> ${newId}`,
+    )
+    res.status(200).json({
+      message: 'File ID updated successfully',
+      uuid,
+      oldId: currentFile.id || currentFile.number,
+      newId,
+    })
+  } catch (error) {
+    logger.error(`Error updating file ID: ${error}`)
+    res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
 router.get('/reset_all', async (req, res) => {
   try {
     // 모든 파일의 reserved 상태를 false로 변경

@@ -28,7 +28,7 @@ function handleReady() {
       command: 'playlist_mode',
       value: pStatus.playlistMode,
     },
-    { command: 'image_time', time: pStatus.imageTime },
+
     { command: 'logo_file', file: pStatus.logoFile },
     { command: 'logo_size', size: pStatus.logoSize },
     { command: 'show_logo', show: pStatus.logoShow },
@@ -256,18 +256,6 @@ const parsePlayerStatus = async (data) => {
             device_id: pStatus.audioDevice,
           })
         }
-        break
-
-      case 'set_image_time':
-        pStatus.imageTime = msgData.value
-        await dbStatus.update(
-          { type: 'imageTime' },
-          { $set: { value: msgData.value } },
-          { upsert: true },
-        )
-        ioClient.emit('pStatus', { imageTime: pStatus.imageTime })
-        broadcastEvent(EVENTS.IMAGE_TIME_CHANGED, { time: pStatus.imageTime })
-        logger.info(`Image time set to: ${pStatus.imageTime}`)
         break
 
       case 'set_fullscreen':

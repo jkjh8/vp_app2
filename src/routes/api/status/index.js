@@ -8,7 +8,6 @@ import { dbStatus } from '../../../db/index.js'
 import { getLogoPath } from '../../../api/files/folders.js'
 import { updateStatusFromDb } from '../../../api/status/index.js'
 import {
-  setPlaylistImageTimeout,
   setLogoFile,
   showLogo,
   setLogoSize,
@@ -58,14 +57,6 @@ router.post('/update', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' })
   }
 })
-
-router.get(
-  '/image_time/:time',
-  asyncHandler(async (req, res) => {
-    const message = await setPlaylistImageTimeout(Number(req.params.time))
-    handleSuccess(res, { pStatus }, message)
-  }),
-)
 
 // logo functions
 router.get(

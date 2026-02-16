@@ -11,7 +11,15 @@ import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
 const setMedia = async (id) => {
   logger.info(`Setting media with ID: ${id}`)
-  const file = await dbFiles.findOne({ number: Number(id) })
+  // Try to find by id field first, then by number
+  let file = await dbFiles.findOne({ id: String(id) })
+  if (!file) {
+    // If not found by id, try by number (for backward compatibility)
+    const numId = Number(id)
+    if (!isNaN(numId)) {
+      file = await dbFiles.findOne({ number: numId })
+    }
+  }
   if (!file) {
     throw new Error('File not found')
   }
@@ -22,7 +30,15 @@ const setMedia = async (id) => {
 
 const playId = async (id) => {
   logger.info(`Received play request with ID: ${id}`)
-  const file = await dbFiles.findOne({ number: Number(id) })
+  // Try to find by id field first, then by number
+  let file = await dbFiles.findOne({ id: String(id) })
+  if (!file) {
+    // If not found by id, try by number (for backward compatibility)
+    const numId = Number(id)
+    if (!isNaN(numId)) {
+      file = await dbFiles.findOne({ number: numId })
+    }
+  }
   if (!file) {
     throw new Error('Player not found')
   }
@@ -194,14 +210,6 @@ const setAudioDevice = async (deviceId) => {
   return `Audio device set to: ${deviceId}`
 }
 
-const setPlaylistImageTimeout = async (time) => {
-  logger.info(`Setting image time to: ${time}`)
-  playerSend({ command: 'image_time', time })
-  await dbStatus.update({ type: 'imageTime' }, { time })
-  ioClient.emit('pStatus', { imageTime: time })
-  return `Image time set to: ${time}`
-}
-
 const setRepeat = async (mode = null) => {
   let modes = ['none', 'all', 'repeat_one']
   if (pStatus.playlistMode === false) {
@@ -213,7 +221,11 @@ const setRepeat = async (mode = null) => {
     const currentIdx = modes.indexOf(pStatus.repeat)
     pStatus.repeat = modes[(currentIdx + 1) % modes.length]
   }
-  await dbStatus.update({ type: 'repeat' }, { mode: pStatus.repeat })
+  await dbStatus.update(
+    { type: 'repeat' },
+    { $set: { value: pStatus.repeat } },
+    { upsert: true },
+  )
   logger.info(`Repeat mode set to: ${pStatus.repeat}`)
   return pStatus.repeat
 }
@@ -270,7 +282,6 @@ export {
   setBackground,
   getAudioDevices,
   setAudioDevice,
-  setPlaylistImageTimeout,
   setRepeat,
   setNext,
   setPrevious,

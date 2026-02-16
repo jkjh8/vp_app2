@@ -331,13 +331,11 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       tracks: tracks,
     })
 
-    // 현재 트랙의 이미지 시간 (없으면 기본값 사용)
+    // 현재 트랙의 이미지 시간 (없으면 기본값 5초 사용)
     const currentTime = currentTrack.is_image
-      ? currentTrack.time || pStatus.imageTime
+      ? currentTrack.time || 5
       : undefined
-    const nextTime = nextTrack?.is_image
-      ? nextTrack.time || pStatus.imageTime
-      : undefined
+    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
 
     // 현재 파일 재생 및 다음 파일 미리 로드
     playerSend({
@@ -386,13 +384,11 @@ const playNextTrack = async () => {
 
     ioClient.emit('pStatus', { trackId: pStatus.trackId })
 
-    // 현재 트랙의 이미지 시간 (없으면 기본값 사용)
+    // 현재 트랙의 이미지 시간 (없으면 기본값 5초 사용)
     const currentTime = currentTrack.is_image
-      ? currentTrack.time || pStatus.imageTime
+      ? currentTrack.time || 5
       : undefined
-    const nextTime = nextTrack?.is_image
-      ? nextTrack.time || pStatus.imageTime
-      : undefined
+    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
 
     playerSend({
       command: 'play_current_and_load_next',
@@ -434,10 +430,8 @@ const preloadNextTrack = async () => {
       return null
     }
 
-    // 다음 트랙의 이미지 시간 (없으면 기본값 사용)
-    const nextTime = nextTrack.is_image
-      ? nextTrack.time || pStatus.imageTime
-      : undefined
+    // 다음 트랙의 이미지 시간 (없으면 기본값 5초 사용)
+    const nextTime = nextTrack.is_image ? nextTrack.time || 5 : undefined
 
     playerSend({
       command: 'preload_next',

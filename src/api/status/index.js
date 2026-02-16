@@ -24,9 +24,6 @@ const updateStatusFromDb = async () => {
       case 'logoShow':
         pStatus.logoShow = status.value
         break
-      case 'imageTime':
-        pStatus.imageTime = status.value
-        break
       case 'startOnPlay':
         pStatus.startOnPlay = status.value
         break

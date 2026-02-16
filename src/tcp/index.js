@@ -8,34 +8,39 @@ import {
   TCP_EVENTS,
 } from '../utils/tcpResponse.js'
 
-let tcpServer = null
+let simpleTcpServer = null
+let jsonTcpServer = null
 let tcpClients = []
 let responseSender = null
 
-function startTcpServer(port = pStatus.tcpPort) {
-  if (tcpServer) {
-    logger.warn('TCP server is already running')
+function startSimpleTcpServer(port = pStatus.tcpSimplePort) {
+  if (simpleTcpServer) {
+    logger.warn('Simple TCP server is already running')
     return
   }
 
-  // Initialize response sender
-  responseSender = new TcpResponseSender(tcpClients)
+  // Initialize response sender if not already created
+  if (!responseSender) {
+    responseSender = new TcpResponseSender(tcpClients)
+  }
 
-  tcpServer = net.createServer((socket) => {
+  simpleTcpServer = net.createServer((socket) => {
     const clientId = `${socket.remoteAddress}:${socket.remotePort}`
-    logger.info(`TCP client connected: ${clientId}`)
+    logger.info(`Simple TCP client connected: ${clientId}`)
 
     tcpClients.push(socket)
-    responseSender = new TcpResponseSender(tcpClients) // Update sender with new client list
+    responseSender = new TcpResponseSender(tcpClients)
 
     // Send welcome message
     const welcomeResponse = TcpResponse.success(
       'connect',
-      'Connected to VP Server',
+      'Connected to VP Server (Simple Command Port)',
       {
         serverId: 'vp_app2',
         version: '0.1.8',
         clientId,
+        port: 'simple',
+        format: 'comma-separated',
         capabilities: ['player', 'playlist', 'files', 'status'],
       },
     )
@@ -49,18 +54,153 @@ function startTcpServer(port = pStatus.tcpPort) {
 
         try {
           logger.info(
-            `TCP message received from ${clientId}: ${trimmedMessage}`,
+            `Simple TCP message received from ${clientId}: ${trimmedMessage}`,
           )
 
-          // Parse command from message
+          // Validate: reject JSON format on simple port
+          if (
+            trimmedMessage.startsWith('{') ||
+            trimmedMessage.startsWith('[')
+          ) {
+            const errorResponse = TcpResponse.error(
+              'format_error',
+              'JSON format not allowed on Simple TCP port. Use JSON TCP port instead.',
+            )
+            responseSender.sendTo(socket, errorResponse)
+            continue
+          }
+
+          // Parse command from simple format
+          const parts = trimmedMessage.split(',')
+          const command = parts[0] || 'unknown'
+
+          const result = await handleMessage(trimmedMessage)
+
+          // 이벤트가 아닌 쿼리/설정 명령어만 응답 전송 (중복 방지)
+          const queryCommands = [
+            'getfiles',
+            'getplaylists',
+            'getplaylist',
+            'getrepeat',
+            'getaudiodevices',
+            'getaudiodevice',
+            'setrepeat',
+            'setaudiodevice',
+            'updatetime',
+            'fullscreen',
+            'togglefullscreen',
+          ]
+          if (queryCommands.includes(command.toLowerCase())) {
+            responseSender.respondToCommand(socket, command, result)
+          }
+        } catch (error) {
+          logger.error(
+            `Error handling Simple TCP message from ${clientId}:`,
+            error,
+          )
+          responseSender.respondToCommand(socket, 'unknown', null, error)
+        }
+      }
+    })
+
+    socket.on('end', () => {
+      logger.info(`Simple TCP client disconnected: ${clientId}`)
+      tcpClients = tcpClients.filter((c) => c !== socket)
+      responseSender = new TcpResponseSender(tcpClients)
+    })
+
+    socket.on('error', (err) => {
+      logger.error(`Simple TCP client error (${clientId}):`, err)
+      tcpClients = tcpClients.filter((c) => c !== socket)
+      responseSender = new TcpResponseSender(tcpClients)
+    })
+  })
+
+  simpleTcpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(
+        `Simple TCP port ${port} is already in use. Trying alternative port...`,
+      )
+      const altPort = port + 1
+      logger.info(`Attempting to start Simple TCP server on port ${altPort}`)
+      pStatus.tcpSimplePort = altPort
+      simpleTcpServer = null
+      setTimeout(() => startSimpleTcpServer(altPort), 1000)
+    } else if (err.code === 'EACCES') {
+      logger.error(
+        `Permission denied for Simple TCP port ${port}. Simple TCP server disabled.`,
+      )
+      logger.info(
+        'Application will continue without Simple TCP server functionality.',
+      )
+      simpleTcpServer = null
+    } else {
+      logger.error(`Simple TCP server error:`, err)
+      simpleTcpServer = null
+    }
+  })
+
+  simpleTcpServer.listen(port, '0.0.0.0', () => {
+    logger.info(`Simple TCP server listening on port ${port}`)
+  })
+}
+
+function startJsonTcpServer(port = pStatus.tcpJsonPort) {
+  if (jsonTcpServer) {
+    logger.warn('JSON TCP server is already running')
+    return
+  }
+
+  // Initialize response sender if not already created
+  if (!responseSender) {
+    responseSender = new TcpResponseSender(tcpClients)
+  }
+
+  jsonTcpServer = net.createServer((socket) => {
+    const clientId = `${socket.remoteAddress}:${socket.remotePort}`
+    logger.info(`JSON TCP client connected: ${clientId}`)
+
+    tcpClients.push(socket)
+    responseSender = new TcpResponseSender(tcpClients)
+
+    // Send welcome message
+    const welcomeResponse = TcpResponse.success(
+      'connect',
+      'Connected to VP Server (JSON Command Port)',
+      {
+        serverId: 'vp_app2',
+        version: '0.1.8',
+        clientId,
+        port: 'json',
+        format: 'json',
+        capabilities: ['player', 'playlist', 'files', 'status'],
+      },
+    )
+    responseSender.sendTo(socket, welcomeResponse)
+
+    socket.on('data', async (data) => {
+      const messages = data.toString().split('\n')
+      for (let message of messages) {
+        const trimmedMessage = message.trim()
+        if (!trimmedMessage) continue
+
+        try {
+          logger.info(
+            `JSON TCP message received from ${clientId}: ${trimmedMessage}`,
+          )
+
+          // Validate: must be JSON format on JSON port
           let command = 'unknown'
           try {
             const parsed = JSON.parse(trimmedMessage)
             command = parsed.command || 'unknown'
-          } catch {
-            // If not JSON, try to extract command from simple format
-            const parts = trimmedMessage.split(',')
-            command = parts[0] || 'unknown'
+          } catch (parseError) {
+            const errorResponse = TcpResponse.error(
+              'format_error',
+              'Invalid JSON format. Simple commands not allowed on JSON TCP port. Use Simple TCP port instead.',
+            )
+            responseSender.sendTo(socket, errorResponse)
+            continue
           }
 
           const result = await handleMessage(trimmedMessage)
@@ -75,7 +215,6 @@ function startTcpServer(port = pStatus.tcpPort) {
             'getaudiodevice',
             'setrepeat',
             'setaudiodevice',
-            'imagetime',
             'updatetime',
             'fullscreen',
             'togglefullscreen',
@@ -84,51 +223,64 @@ function startTcpServer(port = pStatus.tcpPort) {
             responseSender.respondToCommand(socket, command, result)
           }
         } catch (error) {
-          logger.error(`Error handling TCP message from ${clientId}:`, error)
+          logger.error(
+            `Error handling JSON TCP message from ${clientId}:`,
+            error,
+          )
           responseSender.respondToCommand(socket, 'unknown', null, error)
         }
       }
     })
 
     socket.on('end', () => {
-      logger.info(`TCP client disconnected: ${clientId}`)
+      logger.info(`JSON TCP client disconnected: ${clientId}`)
       tcpClients = tcpClients.filter((c) => c !== socket)
-      responseSender = new TcpResponseSender(tcpClients) // Update sender
+      responseSender = new TcpResponseSender(tcpClients)
     })
 
     socket.on('error', (err) => {
-      logger.error(`TCP client error (${clientId}):`, err)
+      logger.error(`JSON TCP client error (${clientId}):`, err)
       tcpClients = tcpClients.filter((c) => c !== socket)
-      responseSender = new TcpResponseSender(tcpClients) // Update sender
+      responseSender = new TcpResponseSender(tcpClients)
     })
   })
 
-  tcpServer.on('error', (err) => {
+  jsonTcpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       logger.error(
-        `TCP port ${port} is already in use. Trying alternative port...`,
+        `JSON TCP port ${port} is already in use. Trying alternative port...`,
       )
-      // 다른 포트로 재시도 (원래 포트 + 1)
       const altPort = port + 1
-      logger.info(`Attempting to start TCP server on port ${altPort}`)
-      pStatus.tcpPort = altPort
-      tcpServer = null
-      setTimeout(() => startTcpServer(altPort), 1000)
+      logger.info(`Attempting to start JSON TCP server on port ${altPort}`)
+      pStatus.tcpJsonPort = altPort
+      jsonTcpServer = null
+      setTimeout(() => startJsonTcpServer(altPort), 1000)
     } else if (err.code === 'EACCES') {
       logger.error(
-        `Permission denied for TCP port ${port}. TCP server disabled.`,
+        `Permission denied for JSON TCP port ${port}. JSON TCP server disabled.`,
       )
-      logger.info('Application will continue without TCP server functionality.')
-      tcpServer = null
+      logger.info(
+        'Application will continue without JSON TCP server functionality.',
+      )
+      jsonTcpServer = null
     } else {
-      logger.error(`TCP server error:`, err)
-      tcpServer = null
+      logger.error(`JSON TCP server error:`, err)
+      jsonTcpServer = null
     }
   })
 
-  tcpServer.listen(port, '0.0.0.0', () => {
-    logger.info(`TCP server listening on port ${port}`)
+  jsonTcpServer.listen(port, '0.0.0.0', () => {
+    logger.info(`JSON TCP server listening on port ${port}`)
   })
+}
+
+// Legacy compatibility: start both servers
+function startTcpServer(
+  simplePort = pStatus.tcpSimplePort,
+  jsonPort = pStatus.tcpJsonPort,
+) {
+  startSimpleTcpServer(simplePort)
+  startJsonTcpServer(jsonPort)
 }
 
 // Enhanced broadcast functions
@@ -151,6 +303,8 @@ function getResponseSender() {
 
 export {
   startTcpServer,
+  startSimpleTcpServer,
+  startJsonTcpServer,
   broadcastEvent,
   broadcastResponse,
   getResponseSender,

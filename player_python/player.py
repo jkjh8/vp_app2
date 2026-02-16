@@ -174,7 +174,7 @@ class Player(QMainWindow):
         self.active_player_id = 0 
         self.next_player_index = 1 if self.active_player_id == 0 else 0
         self.audio_devices = []
-        self.image_time = int(self.pstatus.get("imageTime", 10))
+        self.image_time = 5  # 기본 이미지 재생 시간 5초
         self.logo_file = self.pstatus.get("logo", {}).get("file", "")
         self.logo_show = bool(self.pstatus.get("logo", {}).get("show", True))
         self.logo_size = int(self.pstatus.get("logo", {}).get("size", 0))
@@ -271,7 +271,6 @@ class Player(QMainWindow):
             "preload_next": lambda data: self.preload_next(
                 data.get("next"), int(data.get("next_track_idx", 0)), data.get("next_time")
             ),
-            "image_time": lambda data: self.set_image_time(int(data.get("time", 0))),
             "set_track_index": lambda data: self.update_track_index(int(data.get("index", 0))),
             "next": lambda data: self.next(),
             "previous": lambda data: self.previous(),
@@ -463,6 +462,14 @@ class Player(QMainWindow):
         try:
             self.stop(idx)
             widget = self.player_widgets[idx]
+            
+            # 이미지 표시 전에 로고를 뒤로 보냄 (z-order 관리)
+            if self.logo_widget:
+                self.logo_widget.lower()
+            
+            # 이미지 위젯을 앞으로 가져옴
+            widget.raise_()
+            
             if not hasattr(widget, 'original_pixmap') or not isinstance(widget.original_pixmap, QPixmap):
                 pixmap = QPixmap(image_path)
                 if pixmap.isNull():
@@ -487,13 +494,15 @@ class Player(QMainWindow):
             
             # 이미지 표시 시간을 duration으로 설정
             image_duration = file.get("time", self.image_time)
+            # duration이 0이면 무한대(-1)로 표시
+            duration_ms = 0 if image_duration == 0 else image_duration * 1000
             self.print("player_data", {
                 "id": idx,
                 "event": "display_image",
                 "media": image_path,
                 "state": "displaying_image",
                 "time": 0,
-                "duration": image_duration * 1000,  # 초를 밀리초로 변환
+                "duration": duration_ms,  # 0 = 무한대, 그 외는 밀리초
                 "position": 0,
                 "is_playing": 1,
             })
@@ -520,11 +529,6 @@ class Player(QMainWindow):
             "is_playing": 0,
         })
         
-    def set_image_time(self, time):
-        """이미지 표시 시간 설정"""
-        self.image_time = time
-        self.print("set_image_time", {"value" : self.image_time})
-
     def image_timer(self):
         """이미지 재생 타이머 설정"""
         timer = self.image_timer_instance
@@ -551,9 +555,19 @@ class Player(QMainWindow):
             return
 
         show_time = current_file.get("time")
-        if show_time is None or show_time <= 0:
-            self.print("debug", "Invalid show time for image, using default of 5 seconds.")
+        if show_time is None:
             show_time = self.image_time
+        
+        # show_time이 0이면 무한대로 표시 (타이머 시작 안 함)
+        if show_time == 0:
+            self.print("debug", "Image time is 0, displaying indefinitely (no timer).")
+            return
+        
+        # show_time이 음수면 기본값 사용
+        if show_time < 0:
+            self.print("debug", "Invalid show time for image, using default.")
+            show_time = self.image_time
+        
         timer.start(show_time * 1000)
         self.print("debug", f"Image timer started for {show_time} seconds.")
 
@@ -931,19 +945,34 @@ class Player(QMainWindow):
                 return
             
             # 이미지 재생 중일 때
-            if self.current_files[idx].get("is_image") and self.image_timer_instance.isActive():
+            if self.current_files[idx].get("is_image"):
                 image_duration = self.current_files[idx].get("time", self.image_time)
-                elapsed_time = image_duration - (self.image_timer_instance.remainingTime() / 1000.0)
-                data = {
-                    "id": idx,
-                    "event": "TimeChanged",
-                    "time": int(elapsed_time * 1000),  # 밀리초
-                    "duration": int(image_duration * 1000),  # 밀리초
-                    "position": elapsed_time / image_duration if image_duration > 0 else 0,
-                    "is_playing": True,
-                    "state": "displaying_image",
-                }
-                self.print("player_data", data)
+                
+                # 타이머가 활성화되어 있으면 경과 시간 계산
+                if self.image_timer_instance.isActive():
+                    elapsed_time = image_duration - (self.image_timer_instance.remainingTime() / 1000.0)
+                    data = {
+                        "id": idx,
+                        "event": "TimeChanged",
+                        "time": int(elapsed_time * 1000),  # 밀리초
+                        "duration": int(image_duration * 1000),  # 밀리초
+                        "position": elapsed_time / image_duration if image_duration > 0 else 0,
+                        "is_playing": True,
+                        "state": "displaying_image",
+                    }
+                    self.print("player_data", data)
+                # duration이 0이면 무한대 표시 (타이머 없음)
+                elif image_duration == 0:
+                    data = {
+                        "id": idx,
+                        "event": "TimeChanged",
+                        "time": 0,
+                        "duration": 0,  # 0 = 무한대
+                        "position": 0,
+                        "is_playing": True,
+                        "state": "displaying_image_infinite",
+                    }
+                    self.print("player_data", data)
                 return
             
             # 비디오/오디오 재생 중일 때

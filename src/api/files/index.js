@@ -135,6 +135,7 @@ const postProcessFiles = async (files) => {
         {
           $set: {
             reserved: false,
+            id: String(number), // 기본적으로 number를 id로 변환
             // fieldname: decodedFieldname,
             filename: decodedFilename,
             originalname: decodedOriginalname,
