@@ -1,5 +1,18 @@
-import os, io, sys, json, time, threading, vlc, win32process, win32con
+import os, io, sys, json, time, threading, win32process, win32con
 import socket
+
+# VLC 라이브러리 경로 설정 (vlc 임포트 전에 실행)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+vlc_libs_path = os.path.join(script_dir, 'vlc_libs')
+
+# VLC 라이브러리 경로가 존재하면 환경 변수 설정
+if os.path.exists(vlc_libs_path):
+    os.environ['VLC_PLUGIN_PATH'] = os.path.join(vlc_libs_path, 'plugins')
+    # DLL 경로를 PATH에 추가
+    os.environ['PATH'] = vlc_libs_path + os.pathsep + os.environ.get('PATH', '')
+    
+import vlc
+
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QGraphicsOpacityEffect
 from PySide6.QtCore import QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QIcon

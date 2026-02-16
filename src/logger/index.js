@@ -2,6 +2,7 @@ import winston from 'winston'
 import DailyRotateFile from 'winston-daily-rotate-file'
 import path from 'path'
 import { app } from 'electron'
+import fs from 'fs'
 
 const { combine, timestamp, printf, colorize } = winston.format
 winston.addColors({
@@ -15,7 +16,16 @@ winston.addColors({
 
 let logger = null
 const initLogger = () => {
-  const logDir = path.join(app.getPath('appData'), 'eventlog')
+  // 로그 디렉토리를 사용자 데이터 폴더로 설정
+  // Windows: C:\Users\{username}\AppData\Roaming\VP App\logs
+  const logDir = app.getPath('logs')
+
+  // 로그 디렉토리가 없으면 생성
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true })
+  }
+
+  console.log(`Log directory: ${logDir}`)
   logger = winston.createLogger({
     level: 'debug', // Changed from 'info' to 'debug'
     levels: {

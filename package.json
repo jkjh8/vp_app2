@@ -1,6 +1,6 @@
 {
   "name": "vp_app2",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "main": "src/main.js",
   "type": "module",
   "license": "MIT",
@@ -35,13 +35,7 @@
           "**/*",
           "!**/__pycache__/**",
           "!**/*.pyc",
-          "!**/*.pyo",
-          "!**/*.pyd",
-          "!**/test/**",
-          "!**/tests/**",
-          "!**/pip/**",
-          "!**/setuptools/**",
-          "!**/wheel/**"
+          "!**/*.pyo"
         ]
       },
       {
@@ -51,6 +45,13 @@
       {
         "from": "player_python/requirements.txt",
         "to": "player/requirements.txt"
+      },
+      {
+        "from": "player_python/vlc_libs",
+        "to": "player/vlc_libs",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

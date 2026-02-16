@@ -29,23 +29,20 @@ const startPlayer = () => {
     scriptPath = path.resolve('../vp_app2/player_python/player.py')
     appPath = path.resolve('../vp_app2')
   } else {
-    // 빌드(배포) 환경: 리소스 폴더의 venv 사용
-    const resourcePath =
-      process.resourcesPath || path.dirname(app.getPath('exe'))
-    pythonPath = path.join(
-      resourcePath,
-      'player',
-      '.venv',
-      'Scripts',
-      'python.exe',
-    )
-    scriptPath = path.join(resourcePath, 'player', 'player.py')
-    appPath = resourcePath
+    // 빌드(배포) 환경: extraFiles는 resources 상위 폴더에 복사됨
+    // win-unpacked/resources/ <- process.resourcesPath
+    // win-unpacked/player/    <- extraFiles 위치
+    const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
+    logger.info(`App directory: ${appDir}`)
+    pythonPath = path.join(appDir, 'player', '.venv', 'Scripts', 'python.exe')
+    scriptPath = path.join(appDir, 'player', 'player.py')
+    appPath = appDir
   }
 
   logger.info(`Python path: ${pythonPath}`)
   logger.info(`Script path: ${scriptPath}`)
   logger.info(`App path: ${appPath}`)
+  logger.info(`Resource path: ${process.resourcesPath}`)
 
   player = spawn(pythonPath, [scriptPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -92,12 +89,15 @@ const startPlayer = () => {
 
   player.on('close', (code) => {
     logger.warn(`Player process exited with code: ${code}`)
+    logger.info('Player window closed, shutting down application...')
     player = null
     playerPort = null
     if (socket) {
       socket.destroy()
       socket = null
     }
+    // 플레이어가 종료되면 전체 애플리케이션 종료
+    app.quit()
   })
 
   logger.info(`Python player started with PID: ${player.pid}`)
