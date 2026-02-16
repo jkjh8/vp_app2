@@ -233,16 +233,37 @@ const setRepeat = async (mode = null) => {
 const setNext = async () => {
   logger.info('Setting next track in playlist')
   if (pStatus.playlistMode) {
+    const tracks = pStatus.playlist.tracks
     pStatus.trackId += 1
-    if (pStatus.trackId >= pStatus.playlist.tracks.length) {
+    if (pStatus.trackId >= tracks.length) {
       pStatus.trackId = 0 // Loop back to the start
     }
-    playFile(pStatus.playlist.tracks[pStatus.trackId])
-    ioClient.emit('pStatus', { trackId: pStatus.trackId })
+
+    const currentTrack = tracks[pStatus.trackId]
+    const nextTrack = tracks[pStatus.trackId + 1] || null
+
+    // 이미지 타이머 정보 포함
+    const currentTime = currentTrack.is_image
+      ? currentTrack.time || 5
+      : undefined
+    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
+
+    // playFile 대신 직접 playerSend 호출하여 타이머 정보 전달
+    playerSend({
+      command: 'play_current_and_load_next',
+      current: currentTrack,
+      next: nextTrack,
+      track_idx: pStatus.trackId,
+      current_time: currentTime,
+      next_time: nextTime,
+    })
+
+    pStatus.file = currentTrack
+    ioClient.emit('pStatus', { trackId: pStatus.trackId, file: pStatus.file })
     broadcastEvent(TCP_EVENTS.NEXT_TRACK, {
       playlistId: pStatus.playlist.playlistId,
       trackId: pStatus.trackId,
-      filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
+      filename: currentTrack?.filename,
     })
   }
   return 'Next track set'
@@ -254,12 +275,38 @@ const setPrevious = async () => {
     if (pStatus.player.time < 5000) {
       if (pStatus.trackId > 0) {
         pStatus.trackId -= 1
+
+        const tracks = pStatus.playlist.tracks
+        const currentTrack = tracks[pStatus.trackId]
+        const nextTrack = tracks[pStatus.trackId + 1] || null
+
+        // 이미지 타이머 정보 포함
+        const currentTime = currentTrack.is_image
+          ? currentTrack.time || 5
+          : undefined
+        const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
+
+        // playFile 대신 직접 playerSend 호출하여 타이머 정보 전달
+        playerSend({
+          command: 'play_current_and_load_next',
+          current: currentTrack,
+          next: nextTrack,
+          track_idx: pStatus.trackId,
+          current_time: currentTime,
+          next_time: nextTime,
+        })
+
+        pStatus.file = currentTrack
+        ioClient.emit('pStatus', {
+          trackId: pStatus.trackId,
+          file: pStatus.file,
+        })
         broadcastEvent(TCP_EVENTS.PREV_TRACK, {
           playlistId: pStatus.playlist.playlistId,
           trackId: pStatus.trackId,
-          filename: pStatus.playlist.tracks[pStatus.trackId]?.filename,
+          filename: currentTrack?.filename,
         })
-        return playFile(pStatus.playlist.tracks[pStatus.trackId])
+        return 'Previous track set'
       }
     }
   }
