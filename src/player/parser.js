@@ -4,6 +4,7 @@ import { ioClient } from '../web/index.js'
 import { playerSend } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
+import { preloadNextTrack } from '../api/playlists/index.js'
 import { app } from 'electron'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
@@ -17,15 +18,12 @@ function handleReady() {
   ioClient.emit('pStatus', { ready: true })
   broadcastEvent(EVENTS.PLAYER_READY, {})
 
-  // 초기 설정 명령 전송
+  // 초기 설정 명령 전송 (오디오 디바이스는 먼저 조회)
   const commands = [
     { command: 'background_color', color: pStatus.backgroundColor },
     pStatus.fullscreen && { command: 'set_fullscreen', value: true },
-    { command: 'get_audio_devices' },
-    pStatus.audioDevice && {
-      command: 'set_audio_device',
-      device_id: pStatus.audioDevice,
-    },
+    { command: 'get_audio_devices' }, // 디바이스 목록 먼저 조회
+    // set_audio_device는 audiodevices 이벤트 받은 후에 호출
     pStatus.playlistMode && {
       command: 'playlist_mode',
       value: pStatus.playlistMode,
@@ -70,7 +68,7 @@ function handleEndReached(data) {
     return
   }
 
-  // 플레이리스트 모드 처리 (호스트가 next 명령)
+  // 플레이리스트 모드 처리 (호스트가 다음 파일 관리)
   const tracks = pStatus.playlist?.tracks || []
   const isLastTrack = data.playlist_track_index >= tracks.length - 1
 
@@ -78,19 +76,35 @@ function handleEndReached(data) {
     case 'none':
       if (!isLastTrack) {
         logger.info('Moving to next track (none mode)')
+        // 이미 로드된 다음 파일로 전환
         playerSend({ command: 'next' })
+        // trackId 업데이트
+        pStatus.trackId++
+        ioClient.emit('pStatus', { trackId: pStatus.trackId })
+        // 새로운 다음 파일 미리 로드
+        preloadNextTrack()
         broadcastEvent(EVENTS.TRACK_ENDED, {})
       } else {
         logger.info('Playlist ended (none mode)')
         playerSend({ command: 'stop_all' })
-        playerSend({ command: 'set_track_index', index: 0 })
+        pStatus.trackId = 0
+        ioClient.emit('pStatus', { trackId: pStatus.trackId })
         broadcastEvent(EVENTS.END_REACHED, {})
       }
       break
 
     case 'all':
       logger.info('Moving to next track (all mode)')
+      // 이미 로드된 다음 파일로 전환
       playerSend({ command: 'next' })
+      // trackId 업데이트 (마지막이면 0으로)
+      pStatus.trackId++
+      if (pStatus.trackId >= tracks.length) {
+        pStatus.trackId = 0
+      }
+      ioClient.emit('pStatus', { trackId: pStatus.trackId })
+      // 새로운 다음 파일 미리 로드
+      preloadNextTrack()
       broadcastEvent(EVENTS.TRACK_ENDED, {})
       break
 
@@ -119,22 +133,35 @@ async function handleMediaChanged(data) {
 
   let updated = false
 
+  // uuid로 실제 재생 중인 파일 정보 조회
   if (data.uuid) {
     const file = await dbFiles.findOne({ uuid: data.uuid })
     if (file) {
       pStatus.file = file
       logger.info(`Media changed to: ${file.filename}`)
       updated = true
-    }
-  }
 
-  if (typeof data.playlist_track_index === 'number') {
-    pStatus.trackId = data.playlist_track_index
-    const tracks = pStatus.playlist?.tracks || []
-    if (tracks[pStatus.trackId]) {
-      pStatus.file = tracks[pStatus.trackId]
-      logger.info(`Track index changed to: ${pStatus.trackId}`)
-      updated = true
+      // 플레이리스트 모드이고 playlist_track_index가 있으면 해당 트랙과 일치하는지 확인
+      if (
+        typeof data.playlist_track_index === 'number' &&
+        pStatus.playlistMode
+      ) {
+        const tracks = pStatus.playlist?.tracks || []
+        const trackFromIndex = tracks[data.playlist_track_index]
+
+        // Python이 보낸 트랙 인덱스의 파일과 uuid가 일치하는지 확인
+        if (trackFromIndex && trackFromIndex.uuid === data.uuid) {
+          // 일치하면 trackId 업데이트 (플레이리스트 직접 재생 시)
+          pStatus.trackId = data.playlist_track_index
+          logger.info(
+            `Track index updated to: ${pStatus.trackId} (from Python)`,
+          )
+        } else {
+          logger.warn(
+            `Mismatch: Python track_index=${data.playlist_track_index} uuid=${data.uuid}, but tracks[${data.playlist_track_index}]?.uuid=${trackFromIndex?.uuid}`,
+          )
+        }
+      }
     }
   }
 
@@ -142,6 +169,13 @@ async function handleMediaChanged(data) {
     ioClient.emit('pStatus', {
       file: pStatus.file,
       trackId: pStatus.trackId,
+    })
+    // TCP로 미디어 변경 이벤트 전송
+    broadcastEvent(EVENTS.MEDIA_CHANGED, {
+      fileId: pStatus.file?.number || null,
+      filename: pStatus.file?.filename || null,
+      trackId: pStatus.trackId,
+      playlistId: pStatus.playlist?.playlistId || null,
     })
   }
 }
@@ -213,6 +247,15 @@ const parsePlayerStatus = async (data) => {
         logger.info(
           `Audio devices updated: ${pStatus.audioDevices.length} devices`,
         )
+
+        // 오디오 디바이스 목록을 받은 후 설정된 디바이스 적용
+        if (pStatus.audioDevice) {
+          logger.info(`Setting audio device to: ${pStatus.audioDevice}`)
+          playerSend({
+            command: 'set_audio_device',
+            device_id: pStatus.audioDevice,
+          })
+        }
         break
 
       case 'set_image_time':
@@ -254,6 +297,12 @@ const parsePlayerStatus = async (data) => {
         pStatus.trackId = msgData.value
         ioClient.emit('pStatus', { trackId: pStatus.trackId })
         logger.debug(`Track index: ${pStatus.trackId}`)
+        break
+
+      case 'logo_visibility':
+        pStatus.logoShow = msgData.show
+        ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
+        logger.debug(`Logo visibility: ${pStatus.logoShow}`)
         break
 
       case 'closed':

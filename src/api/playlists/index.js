@@ -92,7 +92,30 @@ const editPlaylist = async (args) => {
       logger.error('Playlist ID is required for editing')
       return null
     }
-    return await dbPlaylists.update({ _id: id }, { $set: updateData })
+    const result = await dbPlaylists.update({ _id: id }, { $set: updateData })
+
+    // 현재 재생 중인 플레이리스트가 업데이트되면 Python 플레이어에 업데이트된 트랙 전송
+    if (pStatus.playlistMode && pStatus.playlist?._id === id) {
+      logger.info('Current playlist edited, sending updated tracks to player')
+      // 플레이리스트 정보 다시 가져오기
+      const updatedPlaylist = await dbPlaylists.findOne({ _id: id })
+      if (updatedPlaylist) {
+        pStatus.playlist = {
+          ...updatedPlaylist,
+          tracks: await getTrackWithFileInfo(updatedPlaylist.tracks),
+        }
+        // Python 플레이어에 업데이트된 트랙 리스트 전송
+        playerSend({
+          command: 'set_tracks',
+          tracks: pStatus.playlist.tracks,
+        })
+        ioClient.emit('pStatus', { playlist: pStatus.playlist })
+        // 다음 트랙 미리 로드
+        await preloadNextTrack()
+      }
+    }
+
+    return result
   } catch (error) {
     logger.error(`Error editing playlist: ${error}`)
     return null
@@ -105,10 +128,33 @@ const setTracksToPlaylist = async (playlistId, tracks) => {
       logger.error('Invalid playlist ID or tracks data')
       return null
     }
-    return await dbPlaylists.update(
+    const result = await dbPlaylists.update(
       { _id: playlistId },
       { $addToSet: { tracks: { $each: tracks } } },
     )
+
+    // 현재 재생 중인 플레이리스트가 업데이트되면 Python 플레이어에 업데이트된 트랙 전송
+    if (pStatus.playlistMode && pStatus.playlist?._id === playlistId) {
+      logger.info('Current playlist updated, sending updated tracks to player')
+      // 플레이리스트 정보 다시 가져오기
+      const updatedPlaylist = await dbPlaylists.findOne({ _id: playlistId })
+      if (updatedPlaylist) {
+        pStatus.playlist = {
+          ...updatedPlaylist,
+          tracks: await getTrackWithFileInfo(updatedPlaylist.tracks),
+        }
+        // Python 플레이어에 업데이트된 트랙 리스트 전송
+        playerSend({
+          command: 'set_tracks',
+          tracks: pStatus.playlist.tracks,
+        })
+        ioClient.emit('pStatus', { playlist: pStatus.playlist })
+        // 다음 트랙 미리 로드
+        await preloadNextTrack()
+      }
+    }
+
+    return result
   } catch (error) {
     logger.error(`Error adding tracks to playlist: ${error}`)
     return null
@@ -208,8 +254,27 @@ const editImageTime = async (playlistId, idx, time) => {
       { _id: playlistId },
       { $set: { tracks: playlist.tracks } },
     )
-    pStatus.playlist = playlist
-    ioClient.emit('pStatus', { playlist: pStatus.playlist })
+
+    // 현재 재생 중인 플레이리스트가 업데이트되면 Python 플레이어에 업데이트된 트랙 전송
+    if (pStatus.playlistMode && pStatus.playlist?._id === playlistId) {
+      pStatus.playlist = {
+        ...playlist,
+        tracks: await getTrackWithFileInfo(playlist.tracks),
+      }
+      // Python 플레이어에 업데이트된 트랙 리스트 전송
+      playerSend({
+        command: 'set_tracks',
+        tracks: pStatus.playlist.tracks,
+      })
+      ioClient.emit('pStatus', { playlist: pStatus.playlist })
+      // 다음 트랙이 변경되었으면 다시 로드
+      if (idx === pStatus.trackId + 1) {
+        logger.info('Next track image time updated, reloading')
+        await preloadNextTrack()
+      }
+    }
+
+    return r
   } catch (error) {
     logger.error(`Error editing image time for playlist: ${error}`)
     return null
@@ -234,21 +299,159 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       pStatus.playlist = playlist
     }
     await setPlaylistMode(true)
-    pStatus.trackId = Number(trackIdx)
+    // trackId는 Python에서 update_track_index를 호출하여 설정하므로 여기서는 설정하지 않음
+    // pStatus.trackId = Number(trackIdx)
+
+    // 전체 플레이리스트 전송
+    const tracks = pStatus.playlist.tracks || []
+
+    if (!tracks || tracks.length === 0) {
+      logger.error('Playlist has no tracks')
+      return null
+    }
+
+    const currentTrack = tracks[Number(trackIdx)]
+    const nextTrack = tracks[Number(trackIdx) + 1] || null
+
+    if (!currentTrack) {
+      logger.error('Current track not found')
+      return null
+    }
+
+    // 현재 재생 파일 설정
+    pStatus.file = currentTrack
     ioClient.emit('pStatus', {
       playlist: pStatus.playlist,
-      trackId: pStatus.trackId,
+      file: pStatus.file,
     })
 
-    // Send tracks to Python player
-    playerSend({ command: 'set_tracks', tracks: pStatus.playlist.tracks })
+    // 전체 트랙 리스트를 플레이어에 전송
+    playerSend({
+      command: 'set_tracks',
+      tracks: tracks,
+    })
 
-    // Start playlist playback
-    playerSend({ command: 'playlist_play', idx: pStatus.trackId })
+    // 현재 트랙의 이미지 시간 (없으면 기본값 사용)
+    const currentTime = currentTrack.is_image
+      ? currentTrack.time || pStatus.imageTime
+      : undefined
+    const nextTime = nextTrack?.is_image
+      ? nextTrack.time || pStatus.imageTime
+      : undefined
 
-    return `Playing playlist ${playlistId} from track ${pStatus.trackId}`
+    // 현재 파일 재생 및 다음 파일 미리 로드
+    playerSend({
+      command: 'play_current_and_load_next',
+      current: currentTrack,
+      next: nextTrack,
+      track_idx: Number(trackIdx),
+      current_time: currentTime,
+      next_time: nextTime,
+    })
+
+    logger.info(
+      `Playing playlist ${playlistId} with ${tracks.length} tracks, starting at track ${trackIdx}, next track preloaded: ${!!nextTrack}, current_time: ${currentTime}, next_time: ${nextTime}`,
+    )
+    return `Playing playlist ${playlistId} from track ${trackIdx}`
   } catch (error) {
     logger.error(`Error playing playlist: ${error}`)
+    return null
+  }
+}
+
+// 다음 트랙으로 이동 (end_reached 시 사용)
+const playNextTrack = async () => {
+  try {
+    const tracks = pStatus.playlist?.tracks || []
+    if (tracks.length === 0) {
+      logger.error('No tracks in playlist')
+      return null
+    }
+
+    // 다음 트랙 인덱스 계산
+    let nextIdx = pStatus.trackId + 1
+    if (nextIdx >= tracks.length) {
+      // repeat 모드에 따라 처리
+      if (pStatus.repeat === 'all') {
+        nextIdx = 0 // 처음부터 다시
+      } else {
+        logger.info('Playlist ended')
+        return null
+      }
+    }
+
+    pStatus.trackId = nextIdx
+    const currentTrack = tracks[nextIdx]
+    const nextTrack = tracks[nextIdx + 1] || null
+
+    ioClient.emit('pStatus', { trackId: pStatus.trackId })
+
+    // 현재 트랙의 이미지 시간 (없으면 기본값 사용)
+    const currentTime = currentTrack.is_image
+      ? currentTrack.time || pStatus.imageTime
+      : undefined
+    const nextTime = nextTrack?.is_image
+      ? nextTrack.time || pStatus.imageTime
+      : undefined
+
+    playerSend({
+      command: 'play_current_and_load_next',
+      current: currentTrack,
+      next: nextTrack,
+      track_idx: pStatus.trackId,
+      current_time: currentTime,
+      next_time: nextTime,
+    })
+
+    logger.info(
+      `Playing next track ${pStatus.trackId}, next track preloaded: ${!!nextTrack}, current_time: ${currentTime}, next_time: ${nextTime}`,
+    )
+    return `Playing track ${pStatus.trackId}`
+  } catch (error) {
+    logger.error(`Error playing next track: ${error}`)
+    return null
+  }
+}
+
+// 다음 트랙만 미리 로드 (플레이리스트 업데이트 시)
+const preloadNextTrack = async () => {
+  try {
+    const tracks = pStatus.playlist?.tracks || []
+    if (tracks.length === 0) {
+      logger.warn('No tracks in playlist to preload')
+      return null
+    }
+
+    const nextIdx = pStatus.trackId + 1
+    if (nextIdx >= tracks.length) {
+      logger.info('No next track to preload (end of playlist)')
+      return null
+    }
+
+    const nextTrack = tracks[nextIdx]
+    if (!nextTrack) {
+      logger.warn('Next track not found')
+      return null
+    }
+
+    // 다음 트랙의 이미지 시간 (없으면 기본값 사용)
+    const nextTime = nextTrack.is_image
+      ? nextTrack.time || pStatus.imageTime
+      : undefined
+
+    playerSend({
+      command: 'preload_next',
+      next: nextTrack,
+      next_track_idx: nextIdx,
+      next_time: nextTime,
+    })
+
+    logger.info(
+      `Preloaded next track ${nextIdx}: ${nextTrack.filename}, next_time: ${nextTime}`,
+    )
+    return `Preloaded track ${nextIdx}`
+  } catch (error) {
+    logger.error(`Error preloading next track: ${error}`)
     return null
   }
 }
@@ -265,4 +468,6 @@ export {
   setPlaylistMode,
   editImageTime,
   playlistPlay,
+  playNextTrack,
+  preloadNextTrack,
 }

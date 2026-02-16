@@ -10,6 +10,7 @@ import {
   setTracksToPlaylist,
   playlistPlay,
   editImageTime,
+  preloadNextTrack,
 } from '../../../api/playlists/index.js'
 
 const router = express.Router()

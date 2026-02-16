@@ -16,7 +16,7 @@ const setMedia = async (id) => {
     throw new Error('File not found')
   }
   setPlaylistMode(false)
-  playerSend({ command: 'set_media', file, idx: 0 })
+  playerSend({ command: 'set_media', file, idx: pStatus.activePlayerId || 0 })
   return `Media set to: ${file.path}`
 }
 
@@ -76,7 +76,7 @@ const playFoundFile = async (text) => {
 
 const play = () => {
   logger.info('Received play request without ID')
-  playerSend({ command: 'play', idx: 0 })
+  playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
   broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
     fileId: pStatus.file?.number || null,
     filename: pStatus.file?.filename || null,
@@ -86,7 +86,7 @@ const play = () => {
 
 const pause = () => {
   logger.info('Received pause request')
-  playerSend({ command: 'pause', idx: 0 })
+  playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
   broadcastEvent(TCP_EVENTS.PLAY_PAUSED, {
     fileId: pStatus.file?.number || null,
   })
@@ -95,13 +95,19 @@ const pause = () => {
 
 const stop = () => {
   logger.info('Received stop request')
-  playerSend({ command: 'stop', idx: 0 })
+  // 플레이리스트 모드일 때는 모든 플레이어 정지
+  if (pStatus.playlistMode) {
+    logger.info('Playlist mode: stopping all players')
+    playerSend({ command: 'stop_all' })
+  } else {
+    playerSend({ command: 'stop', idx: pStatus.activePlayerId || 0 })
+  }
   broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
   return 'Player stopped'
 }
 
 const updateTime = (time) => {
-  playerSend({ command: 'set_time', time, idx: 0 })
+  playerSend({ command: 'set_time', time, idx: pStatus.activePlayerId || 0 })
   return `Time updated to: ${time}`
 }
 
@@ -171,9 +177,12 @@ const getAudioDevices = () => {
 
 const setAudioDevice = async (deviceId) => {
   if (!deviceId) {
-    logger.warn('Received invalid audiodevice message from Python')
-    return
+    logger.warn(
+      'Received invalid audiodevice message - deviceId is empty or undefined',
+    )
+    return 'No deviceId provided'
   }
+  logger.info(`Setting audio device to: ${deviceId}`)
   pStatus.audioDevice = deviceId
   await dbStatus.update(
     { type: 'audioDevice' },

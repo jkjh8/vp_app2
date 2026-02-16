@@ -33,6 +33,9 @@ const updateStatusFromDb = async () => {
       case 'startOnPlaylistId':
         pStatus.startOnPlaylistId = status.playlistId
         break
+      case 'tcpPort':
+        pStatus.tcpPort = status.value
+        break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
     }

@@ -177,12 +177,15 @@ export class TcpResponseSender {
  * 이벤트 타입
  */
 export const TCP_EVENTS = {
+  PLAYER_READY: 'playerReady',
   PLAY_STARTED: 'playStarted',
   PLAY_PAUSED: 'playPaused',
   PLAY_STOPPED: 'playStopped',
   NEXT_TRACK: 'nextTrack',
   PREV_TRACK: 'prevTrack',
+  TRACK_ENDED: 'trackEnded',
   END_REACHED: 'endReached',
+  MEDIA_CHANGED: 'mediaChanged',
   FULLSCREEN_CHANGED: 'fullscreenChanged',
   AUDIO_DEVICES_UPDATED: 'audioDevicesUpdated',
   IMAGE_TIME_CHANGED: 'imageTimeChanged',

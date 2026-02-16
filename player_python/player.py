@@ -184,6 +184,7 @@ class Player(QMainWindow):
         self.background_color = self.pstatus.get("background", "#000000")
         self.fullscreen = bool(self.pstatus.get("fullscreen", False))
         self.audio_devices = []
+        self.set_audio_device_result = False  # 오디오 디바이스 설정 결과
         
         self.instances = []
         self.players = []
@@ -207,12 +208,6 @@ class Player(QMainWindow):
         # fullscreen mode
         self.set_fullscreen(self.fullscreen)
 
-        # audio device management
-        self.get_audio_devices()
-        # set audio device 확인 필요
-        self.set_audio_device_result = False
-        self.set_audio_device_with_retry(self.pstatus.get("device", {}).get("audiodevice", "default"))
-        
         # 이미지 타이머
         self.image_timer_instance = QTimer(self)
         self.image_timer_instance.timeout.connect(lambda: self.on_end_reached(self.active_player_id, None))
@@ -221,6 +216,9 @@ class Player(QMainWindow):
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.send_status)
         self.status_timer.start(100)
+        
+        # 플레이어 준비 완료 알림 (TCP 연결 후 전송되며, Node.js가 오디오 디바이스 설정)
+        QTimer.singleShot(500, lambda: self.print("info", "Player ready"))
         
     # =========================
     # 명령 처리 및 유틸 함수
@@ -266,6 +264,13 @@ class Player(QMainWindow):
             "playlist_mode": lambda data: self.set_playlist_mode(bool(data.get("value", False))),
             "playlist_play": lambda data: self.playlist_play(int(data.get("idx", 0))),
             "set_tracks": lambda data: self.set_tracks(data.get("tracks", [])),
+            "play_current_and_load_next": lambda data: self.play_current_and_load_next(
+                data.get("current"), data.get("next"), int(data.get("track_idx", 0)),
+                data.get("current_time"), data.get("next_time")
+            ),
+            "preload_next": lambda data: self.preload_next(
+                data.get("next"), int(data.get("next_track_idx", 0)), data.get("next_time")
+            ),
             "image_time": lambda data: self.set_image_time(int(data.get("time", 0))),
             "set_track_index": lambda data: self.update_track_index(int(data.get("index", 0))),
             "next": lambda data: self.next(),
@@ -288,15 +293,12 @@ class Player(QMainWindow):
             
         
     def print(self, type, data):
-        """json 포맷으로 메시지 전송 (소켓 + stdout)"""
+        """json 포맷으로 메시지 전송 (TCP 소켓만 사용)"""
         message = json.dumps({"type": type, "data": data}, ensure_ascii=False, separators=(",", ":"))
         
-        # 소켓으로 전송
+        # TCP 소켓으로 전송
         if hasattr(self, 'socket_server') and self.socket_server:
             self.socket_server.send_message(message)
-        
-        # stdout에도 출력 (디버깅용)
-        print(message, flush=True)
         
     def resizeEvent(self, event):
         """윈도우 리사이즈 시 위젯 크기 조정"""
@@ -343,6 +345,8 @@ class Player(QMainWindow):
         logo_x = (self.width() - self.logo_width) // 2
         logo_y = (self.height() - self.logo_height) // 2
         self.logo_widget.setGeometry(logo_x, logo_y, self.logo_width, self.logo_height)
+        if self.logo_show:
+            self.logo_widget.raise_()
         self.logo_widget.setVisible(self.logo_show)
 
     def apply_image_layout(self, idx):
@@ -447,6 +451,7 @@ class Player(QMainWindow):
     def set_logo_visibility(self, visible):
         self.logo_show = visible
         self.apply_logo_layout()
+        self.print("logo_visibility", {"show": visible})
         self.print("debug", f"Logo visibility set to: {visible}")
 
     # =========================
@@ -466,17 +471,29 @@ class Player(QMainWindow):
                 widget.original_pixmap = pixmap
             else:
                 pixmap = widget.original_pixmap
-            self.print('media_changed', { "idx": idx, "uuid": file.get("uuid", ""), "path": image_path })
+            # media_changed 이벤트는 active_player_id에만 발송 (미리 로드 시에는 보내지 않음)
+            if idx == self.active_player_id:
+                media_changed_data = {
+                    "idx": idx,
+                    "uuid": file.get("uuid", ""),
+                    "path": image_path
+                }
+                if self.playlist_mode:
+                    media_changed_data["playlist_track_index"] = self.track_index
+                self.print('media_changed', media_changed_data)
             self.apply_image_layout(idx)
             if not self.playlist_mode:
                 widget.setVisible(True)
+            
+            # 이미지 표시 시간을 duration으로 설정
+            image_duration = file.get("time", self.image_time)
             self.print("player_data", {
                 "id": idx,
                 "event": "display_image",
                 "media": image_path,
                 "state": "displaying_image",
                 "time": 0,
-                "duration": 0,
+                "duration": image_duration * 1000,  # 초를 밀리초로 변환
                 "position": 0,
                 "is_playing": 1,
             })
@@ -571,19 +588,23 @@ class Player(QMainWindow):
         # 미디어 타입에 따라 로고 표시/숨김
         if mimetype.startswith("audio/"):
             self.stop(from_id)
-            to_widget.setVisible(False)
-            from_widget.setVisible(False)
+            # 모든 플레이어 위젯을 뒤로 보내고 숨김
             for player_widget in self.player_widgets:
+                player_widget.lower()
                 player_widget.setVisible(False)
-                self.logo_widget.raise_() # Bring the logo widget to the front
-            if self.logo_widget and self.logo_show:
-                self.set_logo_visibility(True)
-            else:
-                # 나머지 경우 모든 위젯 숨김
-                from_widget.setVisible(False)
+            
+            # 로고 표시
+            self.logo_show = True
+            self.apply_logo_layout()
+            self.print("logo_visibility", {"show": True})
             self.print("debug", f"fade_transition: Audio file detected (mimetype: {mimetype}). Logo will be shown.")
         else:
-            self.set_logo_visibility(False)
+            # 비오디오 파일일 때 로고 숨김
+            self.logo_show = False
+            if self.logo_widget:
+                self.logo_widget.lower()  # 로고를 뒤로 보냄
+            self.apply_logo_layout()
+            self.print("logo_visibility", {"show": False})
             self.print("debug", f"fade_transition: Non-audio file (mimetype: {mimetype}). Logo will be hidden.")
             to_widget.setVisible(True)  # Ensure the target widget is visible before fading in
             to_widget.raise_()  # Bring the target widget to the front
@@ -643,10 +664,12 @@ class Player(QMainWindow):
                 while dev:
                     dev_info = dev.contents
                     devices.append({
-                        "deviceid": dev_info.device.decode() if dev_info.device else "default",
+                        "deviceId": dev_info.device.decode() if dev_info.device else "default",
                         "name": dev_info.description.decode() if dev_info.description else "기본 장치"
                     })
                     dev = dev_info.next
+            # 디바이스 리스트를 인스턴스 변수에 저장
+            self.audio_devices = devices
             self.print("audiodevices", {"devices": devices})
             return devices
         except Exception as e:
@@ -669,7 +692,15 @@ class Player(QMainWindow):
         self.players = [instance.media_player_new() for instance in self.instances]
         for idx, player in enumerate(self.players):
             player.set_hwnd(int(self.player_widgets[idx].winId()))
-            player.audio_output_device_set(None, self.pstatus.get("device", {}).get("audiodevice", "default"))
+            audio_device = self.pstatus.get("audioDevice", "")
+            if audio_device:
+                try:
+                    player.audio_output_device_set(None, audio_device)
+                    self.print("info", f"Audio device set to: {audio_device}")
+                except Exception as e:
+                    self.print("warn", f"Failed to set audio device: {e}")
+            else:
+                self.print("info", "No audio device preset, using system default")
             player.audio_set_volume(100)
 
     def init_players_events(self):
@@ -741,7 +772,16 @@ class Player(QMainWindow):
                 if not current_media or current_media.get_mrl() != media_path:
                     media = self.players[idx].get_instance().media_new(media_path)
                     self.players[idx].set_media(media)
-                self.print('media_changed', { "idx": idx, "uuid": file.get("uuid", ""), "path": media_path })
+                # media_changed 이벤트는 active_player_id에만 발송 (미리 로드 시에는 보내지 않음)
+                if idx == self.active_player_id:
+                    media_changed_data = {
+                        "idx": idx,
+                        "uuid": file.get("uuid", ""),
+                        "path": media_path
+                    }
+                    if self.playlist_mode:
+                        media_changed_data["playlist_track_index"] = self.track_index
+                    self.print('media_changed', media_changed_data)
                 self.update_player_data(idx, None)
         except Exception as e:
             self.print("error", f"Error setting media: {e}")
@@ -784,9 +824,10 @@ class Player(QMainWindow):
             self.print("error", f"play_id: idx {idx} out of range for players list.")
             return
 
+        # active_player_id를 먼저 업데이트 (set_media에서 media_changed 이벤트가 제대로 발송되도록)
+        self.update_active_player_id(idx)
         # set Media file for the player
         self.set_media(file, idx)
-        self.update_active_player_id(idx)
 
         try:
             if file.get("is_image") == False:
@@ -816,20 +857,46 @@ class Player(QMainWindow):
             
     def stop(self, idx=None):
         """플레이어 정지"""
+        # 플레이리스트 모드에서 idx가 명시되지 않았으면 모든 플레이어 정지
+        if self.playlist_mode and idx is None:
+            self.stop_all()
+            return
+        
         if idx is None:
             idx = self.active_player_id
         if self.current_files[idx].get("is_image", True):
             self.stop_image(idx)
         else :
             self.players[idx].stop()
+        self.player_widgets[idx].lower()  # 플레이어 위젯을 뒤로 보냄
         self.player_widgets[idx].setVisible(False)  # Hide the player widget
-        self.set_logo_center()
+        
+        # 로고 표시
+        self.logo_show = True
+        self.apply_logo_layout()
+        self.print("logo_visibility", {"show": True})
         
     def stop_all(self):
         """모든 플레이어 정지"""
+        # 이미지 타이머 정지
+        if self.image_timer_instance and self.image_timer_instance.isActive():
+            self.image_timer_instance.stop()
+            self.print("debug", "Image timer stopped by stop_all")
+        
         # 모든 플레이어 중지 및 위젯 숨김
         for idx in range(len(self.player_widgets)):
-            self.stop(idx)
+            if self.current_files[idx].get("is_image", True):
+                self.stop_image(idx)
+            else:
+                self.players[idx].stop()
+            self.player_widgets[idx].lower()  # 플레이어 위젯을 뒤로 보냄
+            self.player_widgets[idx].setVisible(False)
+        
+        # 로고 표시
+        self.logo_show = True
+        self.apply_logo_layout()
+        self.print("logo_visibility", {"show": True})
+        self.print("info", "All players stopped")
                     
     def update_player_data(self, id, event):
         """플레이어 상태 정보 갱신"""
@@ -863,6 +930,23 @@ class Player(QMainWindow):
             if idx >= len(self.players):
                 return
             
+            # 이미지 재생 중일 때
+            if self.current_files[idx].get("is_image") and self.image_timer_instance.isActive():
+                image_duration = self.current_files[idx].get("time", self.image_time)
+                elapsed_time = image_duration - (self.image_timer_instance.remainingTime() / 1000.0)
+                data = {
+                    "id": idx,
+                    "event": "TimeChanged",
+                    "time": int(elapsed_time * 1000),  # 밀리초
+                    "duration": int(image_duration * 1000),  # 밀리초
+                    "position": elapsed_time / image_duration if image_duration > 0 else 0,
+                    "is_playing": True,
+                    "state": "displaying_image",
+                }
+                self.print("player_data", data)
+                return
+            
+            # 비디오/오디오 재생 중일 때
             player = self.players[idx]
             if player.is_playing():
                 data = {
@@ -934,7 +1018,7 @@ class Player(QMainWindow):
         self.image_timer()
             
     def next(self):
-        """다음 트랙 재생"""
+        """다음 트랙 재생 (이미 로드된 standby 플레이어로 전환)"""
         if not self.playlist_mode:
             self.print("error", "Next track can only be used in playlist mode.")
             return
@@ -943,13 +1027,36 @@ class Player(QMainWindow):
             self.image_timer_instance.stop()
             self.print("debug", "Existing image timer stopped.")
 
-        if not self.current_files[self.next_player_index].get("is_image"):
+        # 트랙 인덱스를 먼저 업데이트 (media_changed 이벤트에서 올바른 인덱스 사용)
+        self.track_index = self.next_track_index
+        self.update_track_index(self.track_index)
+
+        # active_player_id를 먼저 변경 (media_changed 이벤트가 제대로 발송되도록)
+        self.update_active_player_id(self.next_player_index)
+
+        # 다음 플레이어의 파일 타입에 따라 처리
+        next_file = self.current_files[self.next_player_index]
+        if next_file.get("is_image"):
+            # 이미지인 경우 display_image로 표시 (이제 active_player이므로 media_changed 이벤트 발송됨)
+            self.print("debug", f"Next track is image, displaying it")
+            self.display_image(next_file, self.next_player_index)
+        else:
+            # 비디오/오디오인 경우 재생
+            self.print("debug", f"Next track is video/audio, playing it")
             self.players[self.next_player_index].play()
+            # 비디오/오디오의 경우 media_changed 이벤트 발생
+            if next_file:
+                media_changed_data = {
+                    "idx": self.next_player_index,
+                    "uuid": next_file.get("uuid", ""),
+                    "path": next_file.get("path", ""),
+                    "playlist_track_index": self.track_index
+                }
+                self.print('media_changed', media_changed_data)
 
         self.fade_transition(self.next_player_index)
-        self.track_index = self.next_track_index  # Update track_index for image playback
-        self.update_track_index(self.track_index)
-        self.next_file_load()
+        
+        # next_file_load() 제거 - Node.js가 preload_next로 다음 파일 전송
         self.image_timer()
 
     def previous(self):
@@ -974,7 +1081,7 @@ class Player(QMainWindow):
         self.playlist_play(self.track_index)
 
     def next_file_load(self, idx=None):
-        """다음 파일 미리 로드"""
+        """다음 파일 미리 로드 (레거시 - tracks 배열 사용)"""
         self.print("warn", f"Current track index: {self.track_index}, Next track index: {self.next_track_index}")
 
         if idx is not None:
@@ -987,6 +1094,56 @@ class Player(QMainWindow):
 
         self.next_player_index = 1 if self.active_player_id == 0 else 0
         self.set_media(self.tracks[self.next_track_index], self.next_player_index)
+    
+    def play_current_and_load_next(self, current_file, next_file, track_idx, current_time=None, next_time=None):
+        """현재 파일 재생 + 다음 파일 미리 로드"""
+        if not current_file:
+            self.print("error", "No current file provided")
+            return
+        
+        # 트랙 인덱스 업데이트 (WebSocket으로 전송)
+        self.track_index = track_idx
+        self.update_track_index(track_idx)
+        
+        # 이미지 시간을 파일 객체에 병합
+        if current_time is not None and current_file.get("is_image"):
+            current_file["time"] = current_time
+            self.print("info", f"Playing track {track_idx}: {current_file.get('filename', 'unknown')} with image time: {current_time}s")
+        else:
+            self.print("info", f"Playing track {track_idx}: {current_file.get('filename', 'unknown')}")
+        
+        # 현재 파일 재생
+        self.play_id(current_file)
+        
+        # 다음 파일이 있으면 미리 로드
+        if next_file:
+            # 다음 파일에도 이미지 시간 병합
+            if next_time is not None and next_file.get("is_image"):
+                next_file["time"] = next_time
+            self.next_track_index = track_idx + 1
+            self.next_player_index = 1 if self.active_player_id == 0 else 0
+            self.print("info", f"Preloading next track {self.next_track_index}: {next_file.get('filename', 'unknown')}")
+            self.set_media(next_file, self.next_player_index)
+        else:
+            self.print("info", "No next track to preload")
+        
+        # 이미지 타이머 설정
+        self.image_timer()
+    
+    def preload_next(self, next_file, next_track_idx, next_time=None):
+        """다음 파일만 미리 로드 (플레이리스트 업데이트 시)"""
+        if not next_file:
+            self.print("info", "No next file to preload")
+            return
+        
+        # 이미지 시간을 파일 객체에 병합
+        if next_time is not None and next_file.get("is_image"):
+            next_file["time"] = next_time
+        
+        self.next_track_index = next_track_idx
+        self.next_player_index = 1 if self.active_player_id == 0 else 0
+        self.print("info", f"Preloading updated next track {next_track_idx}: {next_file.get('filename', 'unknown')}")
+        self.set_media(next_file, self.next_player_index)
 
 if __name__ == "__main__":
     vp_pstatus_json = os.environ.get("VP_PSTATUS")

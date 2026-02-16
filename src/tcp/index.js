@@ -105,7 +105,9 @@ function startTcpServer(port = pStatus.tcpPort) {
 
   tcpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      logger.error(`TCP port ${port} is already in use. Trying alternative port...`)
+      logger.error(
+        `TCP port ${port} is already in use. Trying alternative port...`,
+      )
       // 다른 포트로 재시도 (원래 포트 + 1)
       const altPort = port + 1
       logger.info(`Attempting to start TCP server on port ${altPort}`)
@@ -113,7 +115,9 @@ function startTcpServer(port = pStatus.tcpPort) {
       tcpServer = null
       setTimeout(() => startTcpServer(altPort), 1000)
     } else if (err.code === 'EACCES') {
-      logger.error(`Permission denied for TCP port ${port}. TCP server disabled.`)
+      logger.error(
+        `Permission denied for TCP port ${port}. TCP server disabled.`,
+      )
       logger.info('Application will continue without TCP server functionality.')
       tcpServer = null
     } else {

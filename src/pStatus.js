@@ -12,7 +12,7 @@ let pStatus = {
   audioDevices: [],
   audioDevice: '',
   logoFile: '',
-  logoShow: false,
+  logoShow: true,
   logoSize: 0,
   file: {},
   player: {
