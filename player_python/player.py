@@ -544,9 +544,18 @@ class Player(QMainWindow):
         mimetype = to_file.get("mimetype", "")
         is_audio = mimetype.startswith("audio/")
         
-        # 이전 플레이어 정리
-        self.stop(from_id)
-        from_widget.setVisible(False)
+        # 이전 플레이어 정리 (조용히 정지, player_data 전송 안 함)
+        if self.current_files[from_id].get("is_image", True):
+            if self.image_timer_instance.isActive():
+                self.image_timer_instance.stop()
+            from_widget.clear()
+            from_widget.setVisible(False)
+            if hasattr(from_widget, 'original_pixmap'):
+                del from_widget.original_pixmap
+        else:
+            self.players[from_id].stop()
+            from_widget.setVisible(False)
+        from_widget.lower()
         
         # 미디어 타입별 로고 및 위젯 처리
         if is_image:
