@@ -92,6 +92,44 @@ const playFoundFile = async (text) => {
 
 const play = () => {
   logger.info('Received play request without ID')
+
+  // 플레이리스트 모드일 때는 현재 트랙 재생
+  if (pStatus.playlistMode) {
+    logger.info('Playlist mode: playing current track')
+    const tracks = pStatus.playlist.tracks
+    if (!tracks || tracks.length === 0) {
+      logger.warn('No tracks in playlist')
+      return 'No tracks in playlist'
+    }
+
+    const currentTrack = tracks[pStatus.trackId] || tracks[0]
+    const nextTrack = tracks[pStatus.trackId + 1] || null
+
+    // 이미지 타이머 정보 포함
+    const currentTime = currentTrack.is_image
+      ? currentTrack.time || 5
+      : undefined
+    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
+
+    playerSend({
+      command: 'play_current_and_load_next',
+      current: currentTrack,
+      next: nextTrack,
+      track_idx: pStatus.trackId,
+      current_time: currentTime,
+      next_time: nextTime,
+    })
+
+    pStatus.file = currentTrack
+    ioClient.emit('pStatus', { trackId: pStatus.trackId, file: pStatus.file })
+    broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+      fileId: currentTrack?.number || null,
+      filename: currentTrack?.filename || null,
+    })
+    return 'Playing playlist track'
+  }
+
+  // 일반 모드
   playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
   broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
     fileId: pStatus.file?.number || null,

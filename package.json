@@ -45,13 +45,6 @@
       {
         "from": "player_python/requirements.txt",
         "to": "player/requirements.txt"
-      },
-      {
-        "from": "player_python/vlc_libs",
-        "to": "player/vlc_libs",
-        "filter": [
-          "**/*"
-        ]
       }
     ],
     "win": {

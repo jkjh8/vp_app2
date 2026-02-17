@@ -1,15 +1,15 @@
-import os, io, sys, json, time, threading, win32process, win32con
+import os, sys, json, time, threading, win32process, win32con
 import socket
 
 # VLC 라이브러리 경로 설정 (vlc 임포트 전에 실행)
-script_dir = os.path.dirname(os.path.abspath(__file__))
-vlc_libs_path = os.path.join(script_dir, 'vlc_libs')
+# script_dir = os.path.dirname(os.path.abspath(__file__))
+# vlc_libs_path = os.path.join(script_dir, 'vlc_libs')
 
-# VLC 라이브러리 경로가 존재하면 환경 변수 설정
-if os.path.exists(vlc_libs_path):
-    os.environ['VLC_PLUGIN_PATH'] = os.path.join(vlc_libs_path, 'plugins')
-    # DLL 경로를 PATH에 추가
-    os.environ['PATH'] = vlc_libs_path + os.pathsep + os.environ.get('PATH', '')
+# # VLC 라이브러리 경로가 존재하면 환경 변수 설정
+# if os.path.exists(vlc_libs_path):
+#     os.environ['VLC_PLUGIN_PATH'] = os.path.join(vlc_libs_path, 'plugins')
+#     # DLL 경로를 PATH에 추가
+#     os.environ['PATH'] = vlc_libs_path + os.pathsep + os.environ.get('PATH', '')
     
 import vlc
 
@@ -18,10 +18,6 @@ from PySide6.QtCore import QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtSvg import QSvgRenderer
-
-# 표준 입출력 인코딩 설정
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
 
 # =====================
 # Player 클래스 (미디어 플레이어)
@@ -57,7 +53,6 @@ class SocketServer(QThread):
     
     def __init__(self):
         super().__init__()
-        self.running = True
         self.client_socket = None
         self.server_socket = None
         self.port = 0
@@ -71,24 +66,20 @@ class SocketServer(QThread):
             self.port = self.server_socket.getsockname()[1]
             self.server_socket.listen(1)
             
-            # 포트 번호 출력 (Node.js가 읽을 수 있도록)
+            # 포트 번호를 stdout으로 출력 (Node.js가 읽음)
             print(json.dumps({"type": "port", "data": {"port": self.port}}), flush=True)
             
             # 클라이언트 연결 대기
-            self.server_socket.settimeout(1.0)  # 1초 타임아웃
-            while self.running:
+            while True:
                 try:
                     self.client_socket, addr = self.server_socket.accept()
-                    self.client_socket.settimeout(None)
-                    print(json.dumps({"type": "info", "data": f"Client connected from {addr}"}), flush=True)
                     
                     # 클라이언트로부터 메시지 수신
                     buffer = ""
-                    while self.running:
+                    while True:
                         try:
                             data = self.client_socket.recv(4096).decode('utf-8')
                             if not data:
-                                print(json.dumps({"type": "warn", "data": "Client disconnected"}), flush=True)
                                 break
                             
                             buffer += data
@@ -99,23 +90,18 @@ class SocketServer(QThread):
                                     self.message_received.emit(line.strip())
                         except socket.timeout:
                             continue
-                        except Exception as e:
-                            print(json.dumps({"type": "error", "data": f"Error receiving data: {e}"}), flush=True)
+                        except Exception:
                             break
                     
                     if self.client_socket:
                         self.client_socket.close()
                         self.client_socket = None
                         
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    if self.running:
-                        print(json.dumps({"type": "error", "data": f"Error accepting connection: {e}"}), flush=True)
+                except Exception:
                     break
                     
-        except Exception as e:
-            print(json.dumps({"type": "error", "data": f"Error starting TCP server: {e}"}), flush=True)
+        except Exception:
+            pass
         finally:
             self.cleanup()
 
@@ -124,26 +110,19 @@ class SocketServer(QThread):
         if self.client_socket:
             try:
                 self.client_socket.sendall((message + '\n').encode('utf-8'))
-            except Exception as e:
-                print(json.dumps({"type": "error", "data": f"Error sending message: {e}"}), flush=True)
-
-    def stop(self):
-        self.running = False
-        self.cleanup()
+            except Exception:
+                pass
 
     def cleanup(self):
-        if self.client_socket:
-            try:
-                self.client_socket.close()
-            except:
-                pass
-            self.client_socket = None
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except:
-                pass
-            self.server_socket = None
+        """소켓 리소스 정리"""
+        for socket_attr in ('client_socket', 'server_socket'):
+            sock = getattr(self, socket_attr, None)
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
+                setattr(self, socket_attr, None)
 
 # =========================
 # Player 메인 클래스
@@ -186,7 +165,6 @@ class Player(QMainWindow):
         self.next_track_index = 0
         self.active_player_id = 0 
         self.next_player_index = 1 if self.active_player_id == 0 else 0
-        self.audio_devices = []
         self.image_time = 5  # 기본 이미지 재생 시간 5초
         self.logo_file = self.pstatus.get("logo", {}).get("file", "")
         self.logo_show = bool(self.pstatus.get("logo", {}).get("show", True))
@@ -216,7 +194,6 @@ class Player(QMainWindow):
         self.update_active_player_id(self.active_player_id)
         
         self.init_players()
-        self.init_players_events()
         
         # fullscreen mode
         self.set_fullscreen(self.fullscreen)
@@ -236,28 +213,19 @@ class Player(QMainWindow):
     # =========================
     # 명령 처리 및 유틸 함수
     # =========================
-    # 명령 처리 함수
     def handle_stdin_message(self, data):
-        """표준입력으로 들어오는 명령 처리"""
+        """TCP 소켓으로 들어오는 명령 처리"""
         try:
             data = json.loads(data)
-        except json.JSONDecodeError:
-            self.print("error", "Invalid JSON received from stdin")
+            command = data.get("command")
+            if not isinstance(command, str):
+                self.print("error", f"Invalid command type: {type(command)}")
+                return
+        except (json.JSONDecodeError, KeyError) as e:
+            self.print("error", f"Invalid message: {e}")
             return
-        command = data.get("command")
-        if not isinstance(command, str):
-            self.print("error", f"Invalid command type: {type(command)}. Expected a string.")
-            return
-        # 짧은 시간 내 중복 메시지 필터링
-        current_time = time.time()
-        if not hasattr(self, 'last_command_time'):
-            self.last_command_time = {}
-        last_time = self.last_command_time.get(command, 0)
-        if current_time - last_time < 0.1:  # 0.5초 이내 중복 메시지 무시
-            self.print("debug", f"Skipping duplicate command within short interval: {command}")
-            return
-        self.last_command_time[command] = current_time
-        # 명령어에 따라 적절한 함수 호출
+        
+        # 명령 디스패치 테이블
         dispatch = {
             # logo
             "show_logo": lambda data: self.set_logo_visibility(data.get("show", True)),
@@ -268,8 +236,8 @@ class Player(QMainWindow):
             "playid": lambda data: self.play_id(data.get("file", {})),
             "play": lambda data: self.play(int(data.get("idx", 0))),
             "pause": lambda data: self.pause(int(data.get("idx", 0))),
-            "stop": lambda data: self.stop(int(data.get("idx", 0))),
-            "stop_all": lambda data: self.stop_all(),
+            "stop": lambda data: self.stop(data.get("idx")),
+            "stop_all": lambda data: self.stop(),
             # audio devices
             "set_audio_device": lambda data: self.set_audio_device(data.get("device_id", "")),
             "get_audio_devices": lambda data: self.get_audio_devices(),
@@ -292,14 +260,14 @@ class Player(QMainWindow):
             "set_fullscreen": lambda data: self.set_fullscreen(data.get("value", False)),
             "background_color": lambda data: self.set_background_color(data.get("color", "#000000")),
         }
+        
+        # 명령 실행
         func = dispatch.get(command)
         if func:
             try:
-                if command == "set_track_index":
-                    pass
                 func(data)
             except Exception as e:
-                self.print("error", f"Error executing command '{command}': {e}")
+                self.print("error", f"Error executing '{command}': {e}")
         else:
             self.print("error", f"Unknown command: {command}")
             
@@ -324,17 +292,6 @@ class Player(QMainWindow):
     def closeEvent(self, event):
         """창 닫기 시 프로세스 종료"""
         self.print("info", "Closing player window, terminating process.")
-        
-        # 타이머 정리
-        if hasattr(self, 'status_timer') and self.status_timer:
-            self.status_timer.stop()
-        if hasattr(self, 'image_timer_instance') and self.image_timer_instance:
-            self.image_timer_instance.stop()
-        
-        # 소켓 서버 정리
-        if hasattr(self, 'socket_server') and self.socket_server:
-            self.socket_server.stop()
-        
         sys.exit(0)
         
     def update_image_size(self):
@@ -342,10 +299,10 @@ class Player(QMainWindow):
         for idx in range(len(self.player_widgets)):
             self.apply_image_layout(idx)
 
-    def update_widget_sizes(self, event):
-        for player in self.player_widgets:
-            player.setGeometry(0, 0, self.width(), self.height())
-        self.update_image_size()
+    # def update_widget_sizes(self, event):
+    #     for player in self.player_widgets:
+    #         player.setGeometry(0, 0, self.width(), self.height())
+    #     self.update_image_size()
 
     # =========================
     # 공통 위젯 레이아웃/가시성 헬퍼 함수
@@ -373,92 +330,84 @@ class Player(QMainWindow):
             widget.setAlignment(Qt.AlignCenter)
 
     # =========================
-    # 로고 관련 함수 (중복 제거)
+    # 로고 관련 함수
     # =========================
-    def set_logo_center(self):
-        self.apply_logo_layout()
-
     def set_logo_size(self, size):
-        try:
-            self.logo_size = size
-            self.update_logo_size()
-        except Exception as e:
-            self.print("error", f"Error setting logo size: {e}")
-
-    def update_logo_size(self):
+        """로고 크기 설정 및 위젯 업데이트"""
         if not self.logo_file or not os.path.exists(self.logo_file):
             self.print("error", "Logo file does not exist or path is empty.")
             return
-        if self.logo_svg:
-            try:
+        
+        try:
+            self.logo_size = size
+            
+            # SVG 또는 Pixmap 크기 계산
+            if self.logo_svg:
                 svg_renderer = QSvgRenderer(self.logo_file)
                 if not svg_renderer.isValid():
                     self.print("error", "Failed to load SVG logo file.")
                     return
                 original_width = svg_renderer.defaultSize().width()
                 original_height = svg_renderer.defaultSize().height()
-                if self.logo_size > 0:
-                    self.logo_width = self.logo_size
-                    self.logo_height = int(original_height * (self.logo_size / original_width))
-                else:
-                    self.logo_width = original_width
-                    self.logo_height = original_height
-            except Exception as e:
-                self.print("error", f"Error loading SVG logo: {e}")
-        else:
-            pixmap = QPixmap(self.logo_file)
-            if pixmap.isNull():
-                self.print("error", "Failed to load Pixmap logo file.")
-                return
-            original_width = pixmap.width()
-            original_height = pixmap.height()
-            if self.logo_size > 0:
-                self.logo_width = self.logo_size
-                self.logo_height = int(original_height * (self.logo_size / original_width))
+            else:
+                pixmap = QPixmap(self.logo_file)
+                if pixmap.isNull():
+                    self.print("error", "Failed to load Pixmap logo file.")
+                    return
+                original_width = pixmap.width()
+                original_height = pixmap.height()
+            
+            # 크기 계산 (비율 유지)
+            if size > 0:
+                self.logo_width = size
+                self.logo_height = int(original_height * (size / original_width))
             else:
                 self.logo_width = original_width
                 self.logo_height = original_height
-        self.print("debug", f"Logo size updated: width={self.logo_width}, height={self.logo_height}")
-        self.apply_logo_layout()
+            
+            self.print("debug", f"Logo size updated: width={self.logo_width}, height={self.logo_height}")
+            self.apply_logo_layout()
+        except Exception as e:
+            self.print("error", f"Error setting logo size: {e}")
 
     def set_logo_file(self, file_path):
-        if not hasattr(self, 'logo_widget') or self.logo_widget is None:
-            self.logo_widget = QLabel(self)
-            self.print("debug", "Logo widget initialized.")
+        """로고 파일 설정 및 위젯 생성"""
+        if not file_path or not os.path.exists(file_path):
+            self.print("warn", f"Logo file not found: {file_path}")
+            return
+        
+        # 기존 위젯 정리
         if hasattr(self, 'logo_widget') and self.logo_widget:
             self.logo_widget.setVisible(False)
             self.logo_widget.deleteLater()
-            self.logo_widget = None
+        
         self.logo_file = file_path
-        self.logo_svg = self.logo_file.lower().endswith(".svg")
-        self.print("debug", f"Logo file set to: {self.logo_file}")
-        self.update_logo_size()
-        if self.logo_svg:
-            try:
-                self.logo_widget = QSvgWidget(self.logo_file, self)
-            except Exception as e:
-                self.print("error", f"Failed to initialize SVG logo widget: {e}")
-                return
-        else:
-            try:
-                pixmap = QPixmap(self.logo_file)
-                if not pixmap.isNull():
-                    self.logo_widget = QLabel(self)
-                    self.logo_widget.setPixmap(
-                        pixmap.scaled(
-                            self.logo_width,
-                            self.logo_height,
-                            Qt.KeepAspectRatio,
-                            Qt.SmoothTransformation,
-                        )
-                    )
-                else:
-                    self.print("error", "Pixmap is null. Failed to load image.")
+        self.logo_svg = file_path.lower().endswith(".svg")
+        self.print("debug", f"Logo file set to: {file_path}")
+        
+        try:
+            # 위젯 생성
+            if self.logo_svg:
+                self.logo_widget = QSvgWidget(file_path, self)
+            else:
+                pixmap = QPixmap(file_path)
+                if pixmap.isNull():
+                    self.print("error", "Failed to load logo image.")
                     return
-            except Exception as e:
-                self.print("error", f"Failed to initialize Pixmap logo widget: {e}")
-                return
-        self.apply_logo_layout()
+                self.logo_widget = QLabel(self)
+                self.logo_widget.setPixmap(
+                    pixmap.scaled(
+                        self.logo_width if self.logo_width > 0 else pixmap.width(),
+                        self.logo_height if self.logo_height > 0 else pixmap.height(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+            
+            # 크기 재계산 및 레이아웃 적용
+            self.set_logo_size(self.logo_size)
+        except Exception as e:
+            self.print("error", f"Failed to set logo file: {e}")
 
     def set_logo_visibility(self, visible):
         self.logo_show = visible
@@ -473,16 +422,9 @@ class Player(QMainWindow):
         idx = self.active_player_id if idx is None else idx
         image_path = file.get("path")
         try:
-            self.stop(idx)
             widget = self.player_widgets[idx]
             
-            # 이미지 표시 전에 로고를 뒤로 보냄 (z-order 관리)
-            if self.logo_widget:
-                self.logo_widget.lower()
-            
-            # 이미지 위젯을 앞으로 가져옴
-            widget.raise_()
-            
+            # 이미지 로드 및 설정 (로고 처리는 fade_transition에서 담당)
             if not hasattr(widget, 'original_pixmap') or not isinstance(widget.original_pixmap, QPixmap):
                 pixmap = QPixmap(image_path)
                 if pixmap.isNull():
@@ -502,8 +444,6 @@ class Player(QMainWindow):
                     media_changed_data["playlist_track_index"] = self.track_index
                 self.print('media_changed', media_changed_data)
             self.apply_image_layout(idx)
-            if not self.playlist_mode:
-                widget.setVisible(True)
             
             # 이미지 표시 시간을 duration으로 설정
             image_duration = file.get("time", self.image_time)
@@ -545,15 +485,6 @@ class Player(QMainWindow):
     def image_timer(self):
         """이미지 재생 타이머 설정"""
         timer = self.image_timer_instance
-
-        if timer.isActive():
-            timer.stop()
-            try:
-                timer.timeout.disconnect()
-                self.print("debug", "Existing image timer stopped and disconnected.")
-            except RuntimeError:
-                self.print("debug", "Timeout signal not connected, skipping disconnect.")
-
         if not self.playlist_mode:
             self.print("error", "Image timer can only be set in playlist mode.")
             return
@@ -562,26 +493,23 @@ class Player(QMainWindow):
             self.print("debug", "Playlist is empty or index is out of range.")
             return
 
-        current_file = self.current_files[self.active_player_id]
+        current_file = self.current_files[self.active_player_id] if self.active_player_id < len(self.current_files) else {}
         if not current_file.get("is_image", False):
             self.print("debug", "Current file is not an image, skipping image timer setup.")
             return
 
-        show_time = current_file.get("time")
-        if show_time is None:
-            show_time = self.image_time
-        
-        # show_time이 0이면 무한대로 표시 (타이머 시작 안 함)
+        show_time = current_file.get("time", self.image_time)
         if show_time == 0:
             self.print("debug", "Image time is 0, displaying indefinitely (no timer).")
             return
-        
-        # show_time이 음수면 기본값 사용
         if show_time < 0:
             self.print("debug", "Invalid show time for image, using default.")
             show_time = self.image_time
-        
-        timer.start(show_time * 1000)
+
+        if timer.isActive():
+            timer.stop()
+
+        timer.start(int(show_time * 1000))
         self.print("debug", f"Image timer started for {show_time} seconds.")
 
     # =========================
@@ -605,63 +533,56 @@ class Player(QMainWindow):
         self.print("set_fullscreen", { "value": value })
         
     def fade_transition(self, idx):
-        """플레이어 전환 및 로고 표시/숨김"""
-        from_id = 1 if idx == 0 else 0  # 현재 동작 중인 위젯의 인덱스
-        from_widget = self.player_widgets[from_id]  # 현재 동작 중인 위젯
+        """플레이어 전환 및 로고 표시/숨김 (이미지/오디오/비디오 통합 처리)"""
+        from_id = 1 if idx == 0 else 0  # 이전 플레이어 인덱스
+        from_widget = self.player_widgets[from_id]
         to_widget = self.player_widgets[idx]
         to_file = self.current_files[idx] if self.current_files and len(self.current_files) > idx else {}
+        
+        # 미디어 타입 판별
+        is_image = to_file.get("is_image", False)
         mimetype = to_file.get("mimetype", "")
-
-        # 미디어 타입에 따라 로고 표시/숨김
-        if mimetype.startswith("audio/"):
-            self.stop(from_id)
-            # 모든 플레이어 위젯을 뒤로 보내고 숨김
+        is_audio = mimetype.startswith("audio/")
+        
+        # 이전 플레이어 정리
+        self.stop(from_id)
+        from_widget.setVisible(False)
+        
+        # 미디어 타입별 로고 및 위젯 처리
+        if is_image:
+            # 이미지: 로고 숨김, 이미지 위젯 표시
+            self.logo_show = False
+            if self.logo_widget:
+                self.logo_widget.lower()
+            self.apply_logo_layout()
+            self.print("logo_visibility", {"show": False})
+            self.print("debug", f"fade_transition: Image file. Logo hidden.")
+            to_widget.setVisible(True)
+            to_widget.raise_()
+        elif is_audio:
+            # 오디오: 모든 위젯 숨김, 로고 표시
             for player_widget in self.player_widgets:
                 player_widget.lower()
                 player_widget.setVisible(False)
-            
-            # 로고 표시
             self.logo_show = True
             self.apply_logo_layout()
             self.print("logo_visibility", {"show": True})
-            self.print("debug", f"fade_transition: Audio file detected (mimetype: {mimetype}). Logo will be shown.")
+            self.print("debug", f"fade_transition: Audio file detected (mimetype: {mimetype}). Logo shown.")
         else:
-            # 비오디오 파일일 때 로고 숨김
+            # 비디오: 로고 숨김, 비디오 위젯 표시
             self.logo_show = False
             if self.logo_widget:
-                self.logo_widget.lower()  # 로고를 뒤로 보냄
+                self.logo_widget.lower()
             self.apply_logo_layout()
             self.print("logo_visibility", {"show": False})
-            self.print("debug", f"fade_transition: Non-audio file (mimetype: {mimetype}). Logo will be hidden.")
-            to_widget.setVisible(True)  # Ensure the target widget is visible before fading in
-            to_widget.raise_()  # Bring the target widget to the front
-
-        self.update_active_player_id(idx)  # Update the active player ID
+            self.print("debug", f"fade_transition: Video file (mimetype: {mimetype}). Logo hidden.")
+            to_widget.setVisible(True)
+            to_widget.raise_()
         
-        from_widget.setVisible(False)
-        if hasattr(from_widget, 'original_pixmap'):
-            self.stop_image(from_id)  # Stop displaying image if it exists
-        if self.players[from_id].is_playing():
-            self.players[from_id].stop()
-            
+        self.update_active_player_id(idx)
     # =========================
     # 오디오 디바이스 관련 함수
     # =========================
-    def set_audio_device_with_retry(self, device_id, retry_interval=2, max_retries=3):
-        """오디오 디바이스 설정(재시도 포함)"""
-        def retry_logic():
-            retries = 0
-            while retries < max_retries:
-                self.set_audio_device(device_id)
-                if self.set_audio_device_result:
-                    self.print("debug", f"Audio device successfully set to: {device_id}")
-                    return
-                self.print("warn", f"Retrying to set audio device: {device_id} (Attempt {retries + 1}/{max_retries})")
-                retries += 1
-                time.sleep(retry_interval)
-            self.print("error", f"Failed to set audio device after {max_retries} attempts.")
-        threading.Thread(target=retry_logic).start()
-
     def set_audio_device(self, device_id):
         """오디오 디바이스 설정"""
         try:
@@ -707,7 +628,7 @@ class Player(QMainWindow):
     # 플레이어 초기화 및 이벤트
     # =========================
     def init_players(self):
-        """VLC 플레이어 인스턴스 및 위젯 초기화"""
+        """VLC 플레이어 인스턴스, 위젯, 이벤트 핸들러 초기화"""
         self.print("info", f"Initializing VLC players...")
         vlc_args = [
             "--no-video-title-show",
@@ -717,8 +638,21 @@ class Player(QMainWindow):
         ]
         self.instances = [vlc.Instance(*vlc_args) for _ in range(2)]
         self.players = [instance.media_player_new() for instance in self.instances]
+        
+        # 플레이어 설정 및 이벤트 핸들러 등록
+        def make_handler(func, *args):
+            def handler(event):
+                try:
+                    func(*args, event)
+                except Exception:
+                    pass
+            return handler
+        
         for idx, player in enumerate(self.players):
+            # 위젯 연결
             player.set_hwnd(int(self.player_widgets[idx].winId()))
+            
+            # 오디오 디바이스 설정
             audio_device = self.pstatus.get("audioDevice", "")
             if audio_device:
                 try:
@@ -729,18 +663,9 @@ class Player(QMainWindow):
             else:
                 self.print("info", "No audio device preset, using system default")
             player.audio_set_volume(100)
-
-    def init_players_events(self):
-        """VLC 플레이어 이벤트 핸들러 등록"""
-        try:
-            def make_handler(func, *args):
-                def handler(event):
-                    try:
-                        func(*args, event)
-                    except Exception as e:
-                        print(f"Error in handler: {e}")
-                return handler
-            for idx, player in enumerate(self.players):
+            
+            # 이벤트 핸들러 등록
+            try:
                 em = player.event_manager()
                 em.event_detach(vlc.EventType.MediaPlayerEndReached)
                 em.event_attach(
@@ -751,18 +676,8 @@ class Player(QMainWindow):
                     vlc.EventType.MediaPlayerEncounteredError,
                     lambda event, id=idx: self.print("error", f"Player {id} encountered an error.")
                 )
-                for event_type in [
-                    vlc.EventType.MediaPlayerTimeChanged,
-                    vlc.EventType.MediaPlayerPlaying,
-                    vlc.EventType.MediaPlayerPaused,
-                    vlc.EventType.MediaPlayerStopped,
-                ]:
-                    em.event_attach(
-                        event_type,
-                        make_handler(self.update_player_data, idx)
-                    )
-        except Exception as e:
-            self.print("error", f"Error initializing player events: {e}")
+            except Exception as e:
+                self.print("error", f"Error initializing player {idx} events: {e}")
         
     def update_active_player_id(self, idx):
         """활성 플레이어 인덱스 갱신"""
@@ -809,27 +724,20 @@ class Player(QMainWindow):
                     if self.playlist_mode:
                         media_changed_data["playlist_track_index"] = self.track_index
                     self.print('media_changed', media_changed_data)
-                self.update_player_data(idx, None)
         except Exception as e:
             self.print("error", f"Error setting media: {e}")
-            
+
     def play(self, idx=0):
         """플레이어 재생"""
-        if self.active_player_id != idx:
-            self.update_active_player_id(idx)
-
         if self.current_files[idx].get("is_image", True):
             # 이미지 재생
             self.display_image(self.current_files[idx], idx)
-            return
         else:
             # 미디어 재생
             self.players[idx].play()
-
-        # 해당 플레이어의 위젯이 숨김 상태면 활성화 하기
-        if not self.player_widgets[idx].isVisible():
-            # 트랜지션(페이드 효과)으로 위젯 전환
-            self.fade_transition(idx)
+        
+        # 모든 미디어 타입에 대해 트랜지션 실행
+        self.fade_transition(idx)
 
     def play_id(self, file):
         """특정 파일 재생"""
@@ -857,8 +765,10 @@ class Player(QMainWindow):
         self.set_media(file, idx)
 
         try:
+            # 이미지가 아니면 VLC 플레이어로 재생
             if file.get("is_image") == False:
                 self.players[idx].play()
+            # 모든 미디어 타입에 대해 트랜지션 실행
             self.fade_transition(idx)
         except Exception as e:
             self.print("error", f"Error playing file: {e}")
@@ -866,7 +776,6 @@ class Player(QMainWindow):
     def on_end_reached(self, idx, event):
         """재생 종료 이벤트 처리"""
         try:
-            self.update_player_data(idx, event)
             self.print('end_reached', {
                 "playlist_track_index": self.track_index,
                 "active_player_id": self.active_player_id,
@@ -883,127 +792,95 @@ class Player(QMainWindow):
         self.players[self.active_player_id].pause()
             
     def stop(self, idx=None):
-        """플레이어 정지"""
-        # 플레이리스트 모드에서 idx가 명시되지 않았으면 모든 플레이어 정지
-        if self.playlist_mode and idx is None:
-            self.stop_all()
-            return
-        
-        if idx is None:
-            idx = self.active_player_id
-        if self.current_files[idx].get("is_image", True):
-            self.stop_image(idx)
-        else :
-            self.players[idx].stop()
-        self.player_widgets[idx].lower()  # 플레이어 위젯을 뒤로 보냄
-        self.player_widgets[idx].setVisible(False)  # Hide the player widget
-        
-        # 로고 표시
-        self.logo_show = True
-        self.apply_logo_layout()
-        self.print("logo_visibility", {"show": True})
-        
-    def stop_all(self):
-        """모든 플레이어 정지"""
-        # 이미지 타이머 정지
-        if self.image_timer_instance and self.image_timer_instance.isActive():
+        """플레이어 정지 (idx=None이면 모든 플레이어 정지)"""
+        # 이미지 타이머 정지 (모든 플레이어 정지 시)
+        if idx is None and self.image_timer_instance and self.image_timer_instance.isActive():
             self.image_timer_instance.stop()
-            self.print("debug", "Image timer stopped by stop_all")
+            self.print("debug", "Image timer stopped")
         
-        # 모든 플레이어 중지 및 위젯 숨김
-        for idx in range(len(self.player_widgets)):
+        # 모든 플레이어 정지
+        if idx is None:
+            for i in range(len(self.player_widgets)):
+                if self.current_files[i].get("is_image", True):
+                    self.stop_image(i)
+                else:
+                    self.players[i].stop()
+                self.player_widgets[i].lower()
+                self.player_widgets[i].setVisible(False)
+            self.print("info", "All players stopped")
+        # 특정 플레이어만 정지
+        else:
             if self.current_files[idx].get("is_image", True):
                 self.stop_image(idx)
             else:
                 self.players[idx].stop()
-            self.player_widgets[idx].lower()  # 플레이어 위젯을 뒤로 보냄
+            self.player_widgets[idx].lower()
             self.player_widgets[idx].setVisible(False)
         
         # 로고 표시
         self.logo_show = True
         self.apply_logo_layout()
         self.print("logo_visibility", {"show": True})
-        self.print("info", "All players stopped")
                     
-    def update_player_data(self, id, event):
-        """플레이어 상태 정보 갱신"""
+    def send_player_data(self, idx, event_type="TimeChanged"):
+        """플레이어 상태 정보 전송 (이미지/비디오/오디오 통합)"""
         try:
-            player = self.players[id]
-            media = player.get_media()
-            data = {
-                "id": id,
-                "event": str(event.type if event else "None"),
-                "media": media.get_mrl() if media else "No media",
-                "state": str(player.get_state()),
-                "time": player.get_time(),
-                "duration": player.get_length(),
-                "position": player.get_position(),
-                "volume": player.audio_get_volume(),
-                "rate": player.get_rate(),
-                "is_playing": player.is_playing(),
-                "fullscreen": player.get_fullscreen(),
-            }
-            self.print("player_data", data)
-        except Exception as e:
-            self.print("error", f"Error updating player data: {e}")
-
-    def send_status(self):
-        """활성 플레이어 상태 주기적 전송 (타이머용)"""
-        try:
-            if not hasattr(self, 'players') or not self.players:
-                return
-            
-            idx = self.active_player_id
             if idx >= len(self.players):
                 return
             
-            # 이미지 재생 중일 때
+            # 이미지 재생 중
             if self.current_files[idx].get("is_image"):
                 image_duration = self.current_files[idx].get("time", self.image_time)
                 
-                # 타이머가 활성화되어 있으면 경과 시간 계산
                 if self.image_timer_instance.isActive():
                     elapsed_time = image_duration - (self.image_timer_instance.remainingTime() / 1000.0)
                     data = {
                         "id": idx,
-                        "event": "TimeChanged",
-                        "time": int(elapsed_time * 1000),  # 밀리초
-                        "duration": int(image_duration * 1000),  # 밀리초
+                        "event": event_type,
+                        "time": int(elapsed_time * 1000),
+                        "duration": int(image_duration * 1000),
                         "position": elapsed_time / image_duration if image_duration > 0 else 0,
                         "is_playing": True,
                         "state": "displaying_image",
                     }
-                    self.print("player_data", data)
-                # duration이 0이면 무한대 표시 (타이머 없음)
                 elif image_duration == 0:
                     data = {
                         "id": idx,
-                        "event": "TimeChanged",
+                        "event": event_type,
                         "time": 0,
-                        "duration": 0,  # 0 = 무한대
+                        "duration": 0,
                         "position": 0,
                         "is_playing": True,
                         "state": "displaying_image_infinite",
                     }
-                    self.print("player_data", data)
+                else:
+                    return
+                self.print("player_data", data)
                 return
             
-            # 비디오/오디오 재생 중일 때
+            # 비디오/오디오 재생 중
             player = self.players[idx]
-            if player.is_playing():
-                data = {
-                    "id": idx,
-                    "event": "TimeChanged",
-                    "time": player.get_time(),
-                    "duration": player.get_length(),
-                    "position": player.get_position(),
-                    "is_playing": True,
-                    "state": str(player.get_state()),
-                }
-                self.print("player_data", data)
+            if not player.is_playing():
+                return
+            
+            data = {
+                "id": idx,
+                "event": event_type,
+                "time": player.get_time(),
+                "duration": player.get_length(),
+                "position": player.get_position(),
+                "is_playing": player.is_playing(),
+                "state": str(player.get_state()),
+            }
+            
+            self.print("player_data", data)
         except Exception as e:
-            # 타이머에서 호출되므로 에러를 조용히 무시
             pass
+    
+    def send_status(self):
+        """타이머용 - 활성 플레이어 상태만 전송"""
+        if hasattr(self, 'players') and self.players:
+            self.send_player_data(self.active_player_id)
 
     def set_time(self, time, idx=None):
         """플레이어 재생 위치 설정"""
@@ -1079,23 +956,23 @@ class Player(QMainWindow):
         # 다음 플레이어의 파일 타입에 따라 처리
         next_file = self.current_files[self.next_player_index]
         if next_file.get("is_image"):
-            # 이미지인 경우 display_image로 표시 (이제 active_player이므로 media_changed 이벤트 발송됨)
-            self.print("debug", f"Next track is image, displaying it")
+            # 이미지인 경우 display_image로 표시
             self.display_image(next_file, self.next_player_index)
         else:
             # 비디오/오디오인 경우 재생
-            self.print("debug", f"Next track is video/audio, playing it")
             self.players[self.next_player_index].play()
-            # 비디오/오디오의 경우 media_changed 이벤트 발생
-            if next_file:
-                media_changed_data = {
-                    "idx": self.next_player_index,
-                    "uuid": next_file.get("uuid", ""),
-                    "path": next_file.get("path", ""),
-                    "playlist_track_index": self.track_index
-                }
-                self.print('media_changed', media_changed_data)
+        
+        # media_changed 이벤트 발생 (display_image에서는 이미 발송됨)
+        if not next_file.get("is_image") and next_file:
+            media_changed_data = {
+                "idx": self.next_player_index,
+                "uuid": next_file.get("uuid", ""),
+                "path": next_file.get("path", ""),
+                "playlist_track_index": self.track_index
+            }
+            self.print('media_changed', media_changed_data)
 
+        # 모든 미디어 타입에 대해 트랜지션 실행 (로고 표시/숨김 통합 처리)
         self.fade_transition(self.next_player_index)
         
         # next_file_load() 제거 - Node.js가 preload_next로 다음 파일 전송
