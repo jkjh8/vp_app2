@@ -29,13 +29,10 @@
     },
     "extraFiles": [
       {
-        "from": "player_python/.venv",
-        "to": "player/.venv",
+        "from": "player_python/python-embed",
+        "to": "player/python-embed",
         "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc",
-          "!**/*.pyo"
+          "**/*"
         ]
       },
       {

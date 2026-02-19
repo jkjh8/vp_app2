@@ -23,18 +23,16 @@ const startPlayer = () => {
 
   if (process.env.NODE_ENV === 'development') {
     // 개발 환경: 상대 경로의 venv 사용
-    pythonPath = path.resolve(
-      '../vp_app2/player_python/.venv/Scripts/python.exe',
-    )
-    scriptPath = path.resolve('../vp_app2/player_python/player.py')
-    appPath = path.resolve('../vp_app2')
+    pythonPath = path.resolve('player_python/python-embed/python.exe')
+    scriptPath = path.resolve('player_python/player.py')
+    appPath = path.resolve('.')
   } else {
     // 빌드(배포) 환경: extraFiles는 resources 상위 폴더에 복사됨
     // win-unpacked/resources/ <- process.resourcesPath
     // win-unpacked/player/    <- extraFiles 위치
     const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
     logger.info(`App directory: ${appDir}`)
-    pythonPath = path.join(appDir, 'player', '.venv', 'Scripts', 'python.exe')
+    pythonPath = path.join(appDir, 'player', 'python-embed', 'python.exe')
     scriptPath = path.join(appDir, 'player', 'player.py')
     appPath = appDir
   }
