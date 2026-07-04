@@ -1,6 +1,6 @@
 {
   "name": "vp_app2",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "src/main.js",
   "type": "module",
   "license": "MIT",
@@ -27,21 +27,22 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "src/**/*",
+      "public/**/*",
+      "!src/player/lib/**"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/**"
+    ],
     "extraFiles": [
       {
-        "from": "player_python/python-embed",
-        "to": "player/python-embed",
+        "from": "../vp_player/dist/player",
+        "to": "player",
         "filter": [
           "**/*"
         ]
-      },
-      {
-        "from": "player_python/player.py",
-        "to": "player/player.py"
-      },
-      {
-        "from": "player_python/requirements.txt",
-        "to": "player/requirements.txt"
       }
     ],
     "win": {
