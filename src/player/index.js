@@ -11,42 +11,65 @@ let socket = null
 let playerPort = 1300
 let reconnectTimer = null
 
+// 플레이어 엔진 선택: 'native' = C++/GStreamer vplayer.exe, 'python' = 레거시 PySide6
+// 프로토콜(루프백 TCP NDJSON + stdout 포트 핸드셰이크)이 동일해 드롭인 교체 가능
+const playerEngine = process.env.VP_PLAYER_ENGINE || 'native'
+
+const resolveNativePlayer = () => {
+  if (process.env.NODE_ENV === 'development') {
+    // 개발: 형제 리포 vp_player의 빌드 산출물 + 시스템 GStreamer bin을 PATH에 주입
+    const exe =
+      process.env.VP_PLAYER_EXE ||
+      path.resolve('../vp_player/build/Debug/vplayer.exe')
+    const gstRoot =
+      process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 ||
+      'C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64' // MSI 기본 설치 경로 폴백
+    return { exe, args: [], extraPath: path.join(gstRoot, 'bin') }
+  }
+  // 배포: player/vplayer.exe + 동봉된 gst-bundle (vplayer가 스스로 GST_PLUGIN_PATH 설정)
+  const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
+  return { exe: path.join(appDir, 'player', 'vplayer.exe'), args: [], extraPath: null }
+}
+
+const resolvePythonPlayer = () => {
+  if (process.env.NODE_ENV === 'development') {
+    return {
+      exe: path.resolve('player_python/python-embed/python.exe'),
+      args: [path.resolve('player_python/player.py')],
+      extraPath: null,
+    }
+  }
+  const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
+  return {
+    exe: path.join(appDir, 'player', 'python-embed', 'python.exe'),
+    args: [path.join(appDir, 'player', 'player.py')],
+    extraPath: null,
+  }
+}
+
 const startPlayer = () => {
   if (player) {
-    logger.warn('Python player process is already running.')
+    logger.warn('Player process is already running.')
     return
   }
 
-  let pythonPath
-  let scriptPath
-  let appPath
+  const appPath =
+    process.env.NODE_ENV === 'development'
+      ? path.resolve('.')
+      : path.dirname(process.resourcesPath || app.getPath('exe'))
+  const { exe, args, extraPath } =
+    playerEngine === 'native' ? resolveNativePlayer() : resolvePythonPlayer()
 
-  if (process.env.NODE_ENV === 'development') {
-    // 개발 환경: 상대 경로의 venv 사용
-    pythonPath = path.resolve('player_python/python-embed/python.exe')
-    scriptPath = path.resolve('player_python/player.py')
-    appPath = path.resolve('.')
-  } else {
-    // 빌드(배포) 환경: extraFiles는 resources 상위 폴더에 복사됨
-    // win-unpacked/resources/ <- process.resourcesPath
-    // win-unpacked/player/    <- extraFiles 위치
-    const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
-    logger.info(`App directory: ${appDir}`)
-    pythonPath = path.join(appDir, 'player', 'python-embed', 'python.exe')
-    scriptPath = path.join(appDir, 'player', 'player.py')
-    appPath = appDir
-  }
-
-  logger.info(`Python path: ${pythonPath}`)
-  logger.info(`Script path: ${scriptPath}`)
+  logger.info(`Player engine: ${playerEngine}`)
+  logger.info(`Player exe: ${exe}`)
   logger.info(`App path: ${appPath}`)
-  logger.info(`Resource path: ${process.resourcesPath}`)
 
-  player = spawn(pythonPath, [scriptPath], {
+  player = spawn(exe, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
     env: {
       ...process.env,
+      ...(extraPath ? { PATH: `${extraPath};${process.env.PATH}` } : {}),
       PYTHONUNBUFFERED: '1',
       PYTHONIOENCODING: 'utf-8',
       VP_PSTATUS: JSON.stringify(pStatus),

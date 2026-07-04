@@ -207,20 +207,26 @@ const parsePlayerStatus = async (data) => {
         break
 
       case 'active_player_id':
-        pStatus.activePlayerId = msgData.value
+        // 프로토콜상 data는 정수 (구현체에 따라 {value} 형태 방어)
+        pStatus.activePlayerId =
+          typeof msgData === 'number' ? msgData : msgData.value
         ioClient.emit('pStatus', { activePlayerId: pStatus.activePlayerId })
         logger.debug(`Active player ID: ${pStatus.activePlayerId}`)
         break
 
       case 'player_data':
         // 플레이어 상태 업데이트 (active player만 반영)
-        if (msgData.id === pStatus.activePlayerId || !pStatus.activePlayerId) {
+        if (
+          msgData.id === pStatus.activePlayerId ||
+          pStatus.activePlayerId == null
+        ) {
           pStatus.player = {
             ...pStatus.player,
-            time: msgData.time || pStatus.player.time,
-            duration: msgData.duration || pStatus.player.duration,
-            position: msgData.position || pStatus.player.position,
-            event: msgData.event || pStatus.player.event,
+            // ??: 0(시작 지점 time, 정지 시 duration 등)도 유효한 값으로 반영
+            time: msgData.time ?? pStatus.player.time,
+            duration: msgData.duration ?? pStatus.player.duration,
+            position: msgData.position ?? pStatus.player.position,
+            event: msgData.event ?? pStatus.player.event,
             is_playing:
               msgData.is_playing !== undefined
                 ? msgData.is_playing

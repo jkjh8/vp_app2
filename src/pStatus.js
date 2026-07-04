@@ -6,7 +6,8 @@ let pStatus = {
   repeat: 'none',
   tcpSimplePort: 15000,
   tcpJsonPort: 15001,
-  webPort: 3000,
+  // VP_WEB_PORT: 개발 환경 포트 충돌(예: VS Code 프리뷰가 3000 점유) 대응용 오버라이드
+  webPort: Number(process.env.VP_WEB_PORT) || 3000,
   startOnPlay: false,
   startOnPlaylistId: null,
   audioDevices: [],

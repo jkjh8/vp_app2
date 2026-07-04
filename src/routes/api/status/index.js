@@ -34,8 +34,9 @@ const uploader = multer({
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const result = await updateStatusFromDb()
-    res.json(result)
+    // updateStatusFromDb()는 pStatus를 갱신만 하고 반환값이 없음(기존엔 빈 바디 응답 버그)
+    await updateStatusFromDb()
+    res.json({ pStatus })
   }),
 )
 
