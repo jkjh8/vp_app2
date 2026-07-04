@@ -5,33 +5,38 @@ import { logger } from '../../logger/index.js'
 const updateStatusFromDb = async () => {
   const st = await dbStatus.find({})
   for (const status of st) {
+    // ??: 값이 비어있는 DB 레코드가 기본값을 undefined로 덮어쓰지 않게 함
+    // (예: backgroundColor undefined → 플레이어에 color 없는 background_color 명령 발신 버그)
     switch (status.type) {
       case 'fullscreen':
-        pStatus.fullscreen = status.value
+        pStatus.fullscreen = status.value ?? pStatus.fullscreen
         break
       case 'backgroundColor':
-        pStatus.backgroundColor = status.value
+        pStatus.backgroundColor = status.value ?? pStatus.backgroundColor
         break
       case 'audioDevice':
-        pStatus.audioDevice = status.value
+        pStatus.audioDevice = status.value ?? pStatus.audioDevice
         break
       case 'logoFile':
-        pStatus.logoFile = status.file
+        pStatus.logoFile = status.file ?? pStatus.logoFile
         break
       case 'logoSize':
-        pStatus.logoSize = status.value
+        pStatus.logoSize = status.value ?? pStatus.logoSize
         break
       case 'logoShow':
-        pStatus.logoShow = status.value
+        pStatus.logoShow = status.value ?? pStatus.logoShow
         break
       case 'startOnPlay':
-        pStatus.startOnPlay = status.value
+        pStatus.startOnPlay = status.value ?? pStatus.startOnPlay
         break
       case 'startOnPlaylistId':
-        pStatus.startOnPlaylistId = status.playlistId
+        pStatus.startOnPlaylistId = status.playlistId ?? pStatus.startOnPlaylistId
         break
       case 'tcpPort':
-        pStatus.tcpPort = status.value
+        pStatus.tcpPort = status.value ?? pStatus.tcpPort
+        break
+      case 'imageTime':
+        pStatus.imageTime = status.value ?? pStatus.imageTime
         break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
