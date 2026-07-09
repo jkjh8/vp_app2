@@ -51,6 +51,9 @@ if (existsSync(spaSrc)) {
 } else {
   console.warn('WARN: public/spa 없음 — vp_ui를 먼저 빌드해 public/spa에 배치할 것')
 }
+// 아이콘(설치기·바로가기용) 및 로고 에셋
+const iconsSrc = path.join(root, 'public', 'icons')
+if (existsSync(iconsSrc)) cpSync(iconsSrc, path.join(out, 'public', 'icons'), { recursive: true })
 
 // --- 5. player (vp_player 네이티브 번들) ---------------------------------------
 const playerSrc = path.join(root, '..', 'vp_player', 'dist', 'player')
@@ -77,6 +80,19 @@ writeFileSync(
     'set VP_PLAYER_ENGINE=native',
     'set PATH=%~dp0player;%PATH%',
     '"%~dp0node.exe" "%~dp0server.cjs"',
+  ].join('\r\n') + '\r\n',
+)
+
+// 콘솔 창 없이 구동하는 VBS 런처 (자동시작·바로가기 대상). 자기 위치로 VP_APP_ROOT 도출.
+writeFileSync(
+  path.join(out, 'vpapp-launch.vbs'),
+  [
+    'Set sh = CreateObject("WScript.Shell")',
+    'appRoot = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\\"))',
+    'sh.Environment("PROCESS")("VP_APP_ROOT") = appRoot',
+    'sh.Environment("PROCESS")("VP_PLAYER_ENGINE") = "native"',
+    'sh.CurrentDirectory = appRoot',
+    "sh.Run \"\"\"\" & appRoot & \"node.exe\"\" \"\"\" & appRoot & \"server.cjs\"\"\", 0, False",
   ].join('\r\n') + '\r\n',
 )
 
