@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, onShutdown } from './runtime.js'
 import { initLogger, logger } from './logger/index.js'
 import { initDb } from './db/index.js'
 import { updateStatusFromDb } from './api/status/index.js'
@@ -10,7 +10,12 @@ import {
   existsTmpPath,
 } from './api/files/folders.js'
 import { startTcpServer } from './tcp/index.js'
-import { startPlayer } from './player/index.js'
+import { startPlayer, stopPlayer } from './player/index.js'
+
+// 종료 시 플레이어 프로세스 정리 (Electron 생명주기 대체)
+onShutdown(() => stopPlayer())
+process.on('SIGINT', () => app.quit())
+process.on('SIGTERM', () => app.quit())
 
 // 중복 실행 방지
 const gotTheLock = app.requestSingleInstanceLock()

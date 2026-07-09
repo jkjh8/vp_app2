@@ -5,6 +5,7 @@ node_modules
 *.exe
 build
 dist
+dist-node
 
 lib
 

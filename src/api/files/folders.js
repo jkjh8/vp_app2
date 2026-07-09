@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app } from '../../runtime.js'
 import path from 'path'
 import fs from 'fs'
 

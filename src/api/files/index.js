@@ -12,22 +12,26 @@ import { generateThumbnail, resizeImage } from './thumbnail.js'
 import { dbFiles, dbPlaylists } from '../../db/index.js'
 
 const setupFFmpeg = () => {
-  let ffmpegExecutablePath = ffmpegPath
-  let ffprobeExecutablePath = ffprobe.path
-  if (ffmpegExecutablePath.includes('app.asar')) {
-    ffmpegExecutablePath = ffmpegExecutablePath.replace(
-      'app.asar',
-      'app.asar.unpacked',
-    )
-  }
-  if (ffprobeExecutablePath.includes('app.asar')) {
-    ffprobeExecutablePath = ffprobeExecutablePath.replace(
-      'app.asar',
-      'app.asar.unpacked',
-    )
-  }
+  // 경로 해석 우선순위:
+  // 1) VP_FFMPEG_PATH / VP_FFPROBE_PATH 환경변수 (esbuild 번들 배포 — __dirname 소실 대응)
+  // 2) 앱 루트의 ffmpeg\ 폴더 (번들 배포 기본 배치)
+  // 3) ffmpeg-static / ffprobe-static (개발 — node_modules, app.asar 언팩 경로 보정)
+  const appRoot = process.env.VP_APP_ROOT || process.cwd()
+  const bundledFfmpeg = path.join(appRoot, 'ffmpeg', 'ffmpeg.exe')
+  const bundledFfprobe = path.join(appRoot, 'ffmpeg', 'ffprobe.exe')
+
+  const unasar = (p) => (p && p.includes('app.asar') ? p.replace('app.asar', 'app.asar.unpacked') : p)
+
+  let ffmpegExecutablePath =
+    process.env.VP_FFMPEG_PATH ||
+    (fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : unasar(ffmpegPath))
+  let ffprobeExecutablePath =
+    process.env.VP_FFPROBE_PATH ||
+    (fs.existsSync(bundledFfprobe) ? bundledFfprobe : unasar(ffprobe.path))
+
   ffmpeg.setFfmpegPath(ffmpegExecutablePath)
   ffmpeg.setFfprobePath(ffprobeExecutablePath)
+  logger.info(`ffmpeg: ${ffmpegExecutablePath}`)
 }
 
 // getVideoMetadata 함수는 비디오 파일의 메타데이터를 가져오는 Promise를 반환합니다.
@@ -76,12 +80,42 @@ const reserveFileNumber = async () => {
   return { uuid, number }
 }
 
+// 여러 파일에 대해 번호를 일괄 예약
+const reserveMultipleFileNumbers = async (count) => {
+  const startNumber = await getNextFileNumber()
+  const reservations = []
+
+  // 모든 예약 데이터를 먼저 생성
+  for (let i = 0; i < count; i++) {
+    const uuid = uuidv4()
+    const number = startNumber + i
+    reservations.push({
+      uuid,
+      number,
+      reserved: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  }
+
+  // 한 번에 모두 삽입
+  await dbFiles.insert(reservations)
+
+  return reservations.map((r) => ({ uuid: r.uuid, number: r.number }))
+}
+
 // update된 파일 후처리 하기
 const postProcessFiles = async (files) => {
   const mediaPath = getMediaPath()
   const tmpPath = getTmpPath()
 
-  for (const file of files) {
+  // 모든 파일에 대해 번호를 미리 예약
+  const reservations = await reserveMultipleFileNumbers(files.length)
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    const { uuid, number } = reservations[i]
+
     try {
       let thumbnailPath = null
       const {
@@ -105,9 +139,6 @@ const postProcessFiles = async (files) => {
       const decodedOriginalname = safeDecode(originalname)
       const decodedFilename = safeDecode(filename)
       const decodedFieldname = safeDecode(fieldname)
-
-      // number와 uuid 미리 예약
-      const { uuid, number } = await reserveFileNumber()
 
       // metadata를 가져오기
       const metadata = await getMetadata(filePath)

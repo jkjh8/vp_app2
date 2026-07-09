@@ -1,7 +1,7 @@
 import winston from 'winston'
 import DailyRotateFile from 'winston-daily-rotate-file'
 import path from 'path'
-import { app } from 'electron'
+import { app } from '../runtime.js'
 import fs from 'fs'
 
 const { combine, timestamp, printf, colorize } = winston.format

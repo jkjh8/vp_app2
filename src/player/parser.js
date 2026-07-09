@@ -5,7 +5,7 @@ import { playerSend } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { preloadNextTrack } from '../api/playlists/index.js'
-import { app } from 'electron'
+import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
 

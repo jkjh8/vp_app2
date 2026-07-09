@@ -1,5 +1,5 @@
 import path from 'path'
-import { app } from 'electron'
+import { app, onShutdown } from '../runtime.js'
 import { logger } from '../logger/index.js'
 import express from 'express'
 import cookieParser from 'cookie-parser'
@@ -44,9 +44,22 @@ const initWebServer = () => {
   registerClientNamespace(ioClient)
   registerPlayerNamespace(ioPlayer)
 
+  // 포트 점유 = 이미 실행 중 (Electron requestSingleInstanceLock 대체 — 단일 인스턴스 보장)
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(`Port ${port} in use — another instance is already running. Exiting.`)
+      process.exit(0)
+    } else {
+      logger.error(`Web server error: ${err.message}`)
+      process.exit(1)
+    }
+  })
+
   server.listen(port, () => {
     logger.info(`Web server running at http://localhost:${port}`)
   })
+
+  onShutdown(() => new Promise((resolve) => server.close(() => resolve())))
   return { io, ioClient, ioPlayer }
 }
 

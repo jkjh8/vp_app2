@@ -1,7 +1,7 @@
 import { spawn } from 'child_process'
 import { createConnection } from 'net'
 import { logger } from '../logger/index.js'
-import { app } from 'electron'
+import { app } from '../runtime.js'
 import path from 'path'
 import parser from './parser.js'
 import pStatus from '../pStatus.js'

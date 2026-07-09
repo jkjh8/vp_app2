@@ -1,6 +1,6 @@
 import Datastore from 'nedb-promises'
 import path from 'path'
-import { app } from 'electron'
+import { app } from '../runtime.js'
 
 let db = null
 let dbStatus = null
