@@ -15,9 +15,7 @@ import { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, statSync } from '
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 
-const require = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'dist-node')
 
@@ -63,12 +61,7 @@ if (existsSync(playerSrc)) {
   console.warn('WARN: vp_player/dist/player 없음 — vp_player에서 bundle.ps1 먼저 실행')
 }
 
-// --- 6. ffmpeg / ffprobe (Phase 2.5에서 제거 예정) -----------------------------
-mkdirSync(path.join(out, 'ffmpeg'), { recursive: true })
-const ffmpegPath = require('ffmpeg-static')
-const ffprobePath = require('ffprobe-static').path
-if (existsSync(ffmpegPath)) cpSync(ffmpegPath, path.join(out, 'ffmpeg', 'ffmpeg.exe'))
-if (existsSync(ffprobePath)) cpSync(ffprobePath, path.join(out, 'ffmpeg', 'ffprobe.exe'))
+// (Phase 2.5: ffmpeg-static/ffprobe-static 제거 — 메타/썸네일은 네이티브 플레이어가 담당)
 
 // --- 7. 수동 실행 스크립트 -----------------------------------------------------
 writeFileSync(
@@ -115,7 +108,7 @@ for (const name of ['node.exe', 'server.cjs']) {
   const fp = path.join(out, name)
   if (existsSync(fp)) console.log(`  ${name}: ${(statSync(fp).size / 1048576).toFixed(1)} MB`)
 }
-for (const d of ['public', 'player', 'ffmpeg']) {
+for (const d of ['public', 'player']) {
   const fp = path.join(out, d)
   if (existsSync(fp)) console.log(`  ${d}/: ${dirSizeMB(fp)} MB`)
 }

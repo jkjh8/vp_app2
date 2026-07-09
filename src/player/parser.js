@@ -1,7 +1,7 @@
 import pStatus from '../pStatus.js'
 import { logger } from '../logger/index.js'
 import { ioClient } from '../web/index.js'
-import { playerSend } from './index.js'
+import { playerSend, resolvePlayerResult } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { preloadNextTrack } from '../api/playlists/index.js'
@@ -288,7 +288,8 @@ const parsePlayerStatus = async (data) => {
         break
 
       case 'track_index':
-        pStatus.trackId = msgData.value
+        // data는 정수 (구현체에 따라 {value} 방어)
+        pStatus.trackId = typeof msgData === 'number' ? msgData : msgData.value
         ioClient.emit('pStatus', { trackId: pStatus.trackId })
         logger.debug(`Track index: ${pStatus.trackId}`)
         break
@@ -297,6 +298,12 @@ const parsePlayerStatus = async (data) => {
         pStatus.logoShow = msgData.show
         ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
         logger.debug(`Logo visibility: ${pStatus.logoShow}`)
+        break
+
+      // probe_media / make_thumbnail 응답 → 대기 중인 playerRequest resolve (Phase 2.5)
+      case 'probe_result':
+      case 'thumbnail_result':
+        resolvePlayerResult(msgData)
         break
 
       case 'closed':

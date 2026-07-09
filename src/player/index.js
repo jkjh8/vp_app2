@@ -241,4 +241,42 @@ const playerSend = (command) => {
   })
 }
 
-export { startPlayer, stopPlayer, playerSend }
+// --- 요청/응답 (probe_media, make_thumbnail 등) ---------------------------------
+// 플레이어에 req_id를 붙여 명령을 보내고, 대응하는 *_result 피드백이 오면 resolve.
+// 피드백 라우팅은 parser.js가 resolvePlayerResult를 호출해 처리한다.
+let reqSeq = 0
+const pendingRequests = new Map()
+
+const playerRequest = (command, args = {}, timeoutMs = 30000) => {
+  return new Promise((resolve) => {
+    if (!socket || socket.destroyed) {
+      resolve({ ok: false, error: 'player not connected' })
+      return
+    }
+    const req_id = ++reqSeq
+    const timer = setTimeout(() => {
+      if (pendingRequests.has(req_id)) {
+        pendingRequests.delete(req_id)
+        logger.warn(`playerRequest '${command}' timed out (req_id=${req_id})`)
+        resolve({ ok: false, error: 'timeout' })
+      }
+    }, timeoutMs)
+    pendingRequests.set(req_id, (data) => {
+      clearTimeout(timer)
+      resolve(data)
+    })
+    playerSend({ command, req_id, ...args })
+  })
+}
+
+// parser.js가 probe_result / thumbnail_result 수신 시 호출
+const resolvePlayerResult = (data) => {
+  if (!data || data.req_id == null) return
+  const cb = pendingRequests.get(data.req_id)
+  if (cb) {
+    pendingRequests.delete(data.req_id)
+    cb(data)
+  }
+}
+
+export { startPlayer, stopPlayer, playerSend, playerRequest, resolvePlayerResult }

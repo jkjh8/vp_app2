@@ -1,51 +1,42 @@
-import ffmpeg from 'fluent-ffmpeg'
-import ffmpegPath from 'ffmpeg-static'
-import ffprobe from 'ffprobe-static'
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { logger } from '../../logger/index.js'
 
 import { getTmpPath, getMediaPath } from './folders.js'
-import { generateThumbnail, resizeImage } from './thumbnail.js'
+import { playerRequest } from '../../player/index.js'
 
 import { dbFiles, dbPlaylists } from '../../db/index.js'
 
+// Phase 2.5: ffmpeg-static 제거 — 메타/썸네일을 네이티브 플레이어(GStreamer)에 위임.
+// setupFFmpeg는 하위호환용 no-op (main.js가 계속 호출).
 const setupFFmpeg = () => {
-  // 경로 해석 우선순위:
-  // 1) VP_FFMPEG_PATH / VP_FFPROBE_PATH 환경변수 (esbuild 번들 배포 — __dirname 소실 대응)
-  // 2) 앱 루트의 ffmpeg\ 폴더 (번들 배포 기본 배치)
-  // 3) ffmpeg-static / ffprobe-static (개발 — node_modules, app.asar 언팩 경로 보정)
-  const appRoot = process.env.VP_APP_ROOT || process.cwd()
-  const bundledFfmpeg = path.join(appRoot, 'ffmpeg', 'ffmpeg.exe')
-  const bundledFfprobe = path.join(appRoot, 'ffmpeg', 'ffprobe.exe')
-
-  const unasar = (p) => (p && p.includes('app.asar') ? p.replace('app.asar', 'app.asar.unpacked') : p)
-
-  let ffmpegExecutablePath =
-    process.env.VP_FFMPEG_PATH ||
-    (fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : unasar(ffmpegPath))
-  let ffprobeExecutablePath =
-    process.env.VP_FFPROBE_PATH ||
-    (fs.existsSync(bundledFfprobe) ? bundledFfprobe : unasar(ffprobe.path))
-
-  ffmpeg.setFfmpegPath(ffmpegExecutablePath)
-  ffmpeg.setFfprobePath(ffprobeExecutablePath)
-  logger.info(`ffmpeg: ${ffmpegExecutablePath}`)
+  logger.info('media probe/thumbnail delegated to native player (GStreamer)')
 }
 
-// getVideoMetadata 함수는 비디오 파일의 메타데이터를 가져오는 Promise를 반환합니다.
-const getMetadata = (filePath) => {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        // logger.error('Error getting video metadata:', err)
-        reject(err)
-      } else {
-        resolve(metadata)
-      }
-    })
+// 네이티브 플레이어로 메타데이터 프로브 (ffprobe 대체). 실패해도 업로드는 진행.
+const getMetadata = async (filePath) => {
+  const res = await playerRequest('probe_media', { path: filePath }, 30000)
+  if (!res || !res.ok) {
+    logger.warn(`probe_media failed for ${filePath}: ${res && res.error}`)
+    return {} // 메타데이터는 표시용 — 실패 시 빈 객체로 계속
+  }
+  return { format: res.format, streams: res.streams }
+}
+
+// 네이티브 플레이어로 썸네일 생성 (ffmpeg 대체). 결과 경로를 즉시 반환하고
+// 생성은 백그라운드로 진행(기존 fire-and-forget 동작 유지). 0=무한 이미지 대비 at_sec.
+const makeThumbnail = (filePath, outputDir, isImage) => {
+  const baseName = path.parse(filePath).name
+  const thumbnailPath = path.join(outputDir, `thumbnail-${baseName}.png`)
+  playerRequest(
+    'make_thumbnail',
+    { path: filePath, out: thumbnailPath, is_image: isImage, at_sec: 5, width: 320 },
+    30000,
+  ).then((r) => {
+    if (!r || !r.ok) logger.warn(`make_thumbnail failed for ${filePath}: ${r && r.error}`)
   })
+  return thumbnailPath
 }
 
 // 파일 등록 시 중복되지 않는 숫자(순번) 생성 함수
@@ -140,24 +131,23 @@ const postProcessFiles = async (files) => {
       const decodedFilename = safeDecode(filename)
       const decodedFieldname = safeDecode(fieldname)
 
-      // metadata를 가져오기
-      const metadata = await getMetadata(filePath)
       // mediaPath아래 uuid 폴더 만들기
       const uuidFolderPath = path.join(mediaPath, uuid)
       await fs.promises.mkdir(uuidFolderPath, { recursive: true })
 
       // Windows에서 한글 경로 문제 방지: Buffer.from(str, 'utf8').toString() 사용
-      // 단, Node.js는 기본적으로 UTF-8을 지원하므로, 문제가 계속된다면 파일시스템/환경 문제일 수 있음
       const safeFileName = Buffer.from(decodedFieldname, 'utf8').toString()
       const newFilePath = path.join(uuidFolderPath, safeFileName)
 
-      // Move the file to the new location
+      // 최종 위치로 이동한 뒤 프로브/썸네일 (플레이어가 최종 경로를 읽음)
       await fs.promises.rename(filePath, newFilePath)
 
-      if (mimetype.startsWith('video/')) {
-        thumbnailPath = generateThumbnail(newFilePath, uuidFolderPath)
-      } else if (mimetype.startsWith('image/')) {
-        thumbnailPath = resizeImage(newFilePath, uuidFolderPath)
+      // metadata (표시용) — 네이티브 플레이어 GstDiscoverer, 실패해도 계속
+      const metadata = await getMetadata(newFilePath)
+
+      const isImage = mimetype.startsWith('image/')
+      if (mimetype.startsWith('video/') || isImage) {
+        thumbnailPath = makeThumbnail(newFilePath, uuidFolderPath, isImage)
       }
 
       // 예약된 number와 uuid로 파일 정보 업데이트
