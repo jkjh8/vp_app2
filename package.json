@@ -6,8 +6,6 @@
   "license": "MIT",
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "^36.5.0",
-    "electron-builder": "^26.0.12",
     "esbuild": "^0.28.1",
     "eslint": "^9.29.0",
     "eslint-config-prettier": "^10.1.5",
@@ -16,51 +14,11 @@
     "prettier": "^3.6.0"
   },
   "scripts": {
-    "start": "electron .",
-    "dev": "cross-env NODE_ENV=development nodemon --exec electron .",
+    "start": "node src/main.js",
+    "dev": "cross-env NODE_ENV=development nodemon --exec node src/main.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write .",
-    "build": "electron-builder"
-  },
-  "build": {
-    "appId": "com.example.vpapp2",
-    "productName": "VP App",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "public/**/*",
-      "!src/player/lib/**"
-    ],
-    "extraFiles": [
-      {
-        "from": "../vp_player/dist/player",
-        "to": "player",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "./public/icons/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": true,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "./public/icons/icon.ico",
-      "uninstallerIcon": "./public/icons/icon.ico",
-      "uninstallDisplayName": "VP App Uninstaller"
-    }
+    "build": "node scripts/build-node.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

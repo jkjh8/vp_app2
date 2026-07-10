@@ -93,9 +93,22 @@ const playFoundFile = async (text) => {
 const play = () => {
   logger.info('Received play request without ID')
 
+  // 덱이 일시정지 상태(로드 유지)면 이어서 재생, 그 외(정지/최초)에는 파일을 다시 로드
+  const isPaused = pStatus.player.event === 'paused'
+
   // 플레이리스트 모드일 때는 현재 트랙 재생
   if (pStatus.playlistMode) {
-    logger.info('Playlist mode: playing current track')
+    if (isPaused) {
+      logger.info('Playlist mode: resuming paused track')
+      playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
+      broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+        fileId: pStatus.file?.number || null,
+        filename: pStatus.file?.filename || null,
+      })
+      return 'Resumed playlist track'
+    }
+
+    logger.info('Playlist mode: reloading current track')
     const tracks = pStatus.playlist.tracks
     if (!tracks || tracks.length === 0) {
       logger.warn('No tracks in playlist')
@@ -129,13 +142,28 @@ const play = () => {
     return 'Playing playlist track'
   }
 
-  // 일반 모드
-  playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
+  // 일반 모드: 일시정지면 이어서 재생
+  if (isPaused) {
+    playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
+    broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
+      fileId: pStatus.file?.number || null,
+      filename: pStatus.file?.filename || null,
+    })
+    return 'Resumed'
+  }
+
+  // 정지 상태 또는 최초 실행: 마지막 재생했던(또는 선택된) 파일을 다시 로드
+  if (!pStatus.file?.path) {
+    logger.warn('No file to play')
+    return 'No file to play'
+  }
+  playerSend({ command: 'playid', file: pStatus.file })
+  ioClient.emit('pStatus', { file: pStatus.file })
   broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
     fileId: pStatus.file?.number || null,
     filename: pStatus.file?.filename || null,
   })
-  return 'Playing without ID'
+  return `Playing file: ${pStatus.file.path}`
 }
 
 const pause = () => {
@@ -226,6 +254,7 @@ const setBackground = async (background) => {
 }
 
 const getAudioDevices = () => {
+  playerSend({ command: 'get_audio_devices' })
   return 'Requesting current audio device'
 }
 

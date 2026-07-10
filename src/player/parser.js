@@ -265,10 +265,12 @@ const parsePlayerStatus = async (data) => {
         break
 
       case 'set_fullscreen':
-        pStatus.fullscreen = msgData.value
+        // 프로토콜상 data는 bool 원시값 (구현체에 따라 {value} 방어)
+        pStatus.fullscreen =
+          typeof msgData === 'boolean' ? msgData : msgData.value
         await dbStatus.update(
           { type: 'fullscreen' },
-          { $set: { value: msgData.value } },
+          { $set: { value: pStatus.fullscreen } },
           { upsert: true },
         )
         ioClient.emit('pStatus', { fullscreen: pStatus.fullscreen })
@@ -277,10 +279,12 @@ const parsePlayerStatus = async (data) => {
         break
 
       case 'set_background':
-        pStatus.backgroundColor = msgData.background
+        // 프로토콜상 data는 색상 문자열 원시값 (구현체에 따라 {background} 방어)
+        pStatus.backgroundColor =
+          typeof msgData === 'string' ? msgData : msgData.background
         await dbStatus.update(
           { type: 'backgroundColor' },
-          { $set: { value: msgData.background } },
+          { $set: { value: pStatus.backgroundColor } },
           { upsert: true },
         )
         ioClient.emit('pStatus', { backgroundColor: pStatus.backgroundColor })
