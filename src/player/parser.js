@@ -5,7 +5,7 @@ import { playerSend, resolvePlayerResult } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { preloadNextTrack } from '../api/playlists/index.js'
-import { stopAudioLane } from '../api/playlists/audioLane.js'
+import { stopAllTrackAudios, syncTrackAudios } from '../api/playlists/trackAudio.js'
 import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
@@ -94,7 +94,7 @@ function handleEndReached(data) {
       } else {
         logger.info('Playlist ended (none mode)')
         playerSend({ command: 'stop_all' })
-        stopAudioLane() // 메인 레인 종료 = 병행 오디오도 종료 (리핏×레인 매트릭스)
+        stopAllTrackAudios() // 재생 종료 = 트랙 종속 오디오도 종료
         pStatus.trackId = 0
         ioClient.emit('pStatus', { trackId: pStatus.trackId })
         broadcastEvent(EVENTS.END_REACHED, {})
@@ -119,7 +119,7 @@ function handleEndReached(data) {
     case 'single':
       logger.info('Single track mode, stopping')
       playerSend({ command: 'stop', idx: data.active_player_id })
-      stopAudioLane() // 재생 종료 — 병행 오디오도 종료
+      stopAllTrackAudios() // 재생 종료 — 트랙 종속 오디오도 종료
       broadcastEvent(EVENTS.END_REACHED, {})
       break
 
@@ -179,6 +179,11 @@ async function handleMediaChanged(data) {
       file: pStatus.file,
       trackId: pStatus.trackId,
     })
+    // 트랙 종속 오디오 스택 동기화 — 실제 화면 전환(media_changed) 시점에 현재 트랙의
+    // 추가 오디오를 기동/교체 (같은 트랙 중복 media_changed는 syncTrackAudios가 무시)
+    if (pStatus.playlistMode) {
+      syncTrackAudios(pStatus.trackId)
+    }
     // TCP로 미디어 변경 이벤트 전송
     broadcastEvent(EVENTS.MEDIA_CHANGED, {
       fileId: pStatus.file?.number || null,

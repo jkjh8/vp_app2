@@ -7,10 +7,10 @@ import { playerSend } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
 import {
-  stopAudioLane,
-  pauseAudioLane,
-  resumeAudioLane,
-} from '../playlists/audioLane.js'
+  stopAllTrackAudios,
+  pauseTrackAudios,
+  resumeTrackAudios,
+} from '../playlists/trackAudio.js'
 import { broadcastEvent } from '../../tcp/index.js'
 import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
@@ -106,7 +106,7 @@ const play = () => {
     if (isPaused) {
       logger.info('Playlist mode: resuming paused track')
       playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
-      resumeAudioLane() // 병행 오디오 레인도 함께 재개
+      resumeTrackAudios() // 트랙 종속 오디오도 함께 재개
       broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
         fileId: pStatus.file?.number || null,
         filename: pStatus.file?.filename || null,
@@ -178,8 +178,8 @@ const pause = () => {
   const wasPaused = pStatus.player.event === 'paused'
   playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
   if (pStatus.playlistMode) {
-    if (wasPaused) resumeAudioLane()
-    else pauseAudioLane()
+    if (wasPaused) resumeTrackAudios()
+    else pauseTrackAudios()
   }
   broadcastEvent(TCP_EVENTS.PLAY_PAUSED, {
     fileId: pStatus.file?.number || null,
@@ -196,7 +196,7 @@ const stop = () => {
   } else {
     playerSend({ command: 'stop', idx: pStatus.activePlayerId || 0 })
   }
-  stopAudioLane() // 병행 오디오 레인도 일괄 정지 (레인 없으면 no-op)
+  stopAllTrackAudios() // 트랙 종속 오디오도 일괄 정지 (없으면 no-op)
   broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
   return 'Player stopped'
 }

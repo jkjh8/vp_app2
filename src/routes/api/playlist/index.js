@@ -13,10 +13,7 @@ import {
   editTrack,
   preloadNextTrack,
 } from '../../../api/playlists/index.js'
-import {
-  setAudioLane,
-  setLaneItemVolume,
-} from '../../../api/playlists/audioLane.js'
+import { setTrackAudioLive } from '../../../api/playlists/trackAudio.js'
 
 const router = express.Router()
 
@@ -95,37 +92,23 @@ router.get('/play', async (req, res) => {
   }
 })
 
-// 병행 오디오 레인 전체 교체 (v2): body {id, audioLane:[{itemId?,uuid,enabled,loop,volume,channel_map}]}
-router.put('/audio_lane', async (req, res) => {
+// 재생 중인 트랙 오디오의 볼륨/뮤트 라이브 변경 (슬라이더/토글 — 목록 재조회 없이 즉시).
+// 영속화는 별도로 PUT /track patch.audios 로. body {audioId, volume?, muted?}
+router.put('/track_audio/live', async (req, res) => {
   try {
-    const { id, audioLane } = req.body
-    if (!id || !Array.isArray(audioLane)) {
-      return res.status(400).json({ error: 'id and audioLane array are required' })
+    const { audioId, volume, muted } = req.body
+    if (!audioId) {
+      return res.status(400).json({ error: 'audioId is required' })
     }
-    const result = await setAudioLane(id, audioLane)
-    res.status(200).json(result)
+    const ok = setTrackAudioLive(audioId, { volume, muted })
+    res.status(200).json({ ok })
   } catch (error) {
-    logger.error(`Error occurred while updating audio lane: ${error}`)
-    res.status(500).json({ error: 'Failed to update audio lane' })
+    logger.error(`Error occurred while updating track audio live: ${error}`)
+    res.status(500).json({ error: 'Failed to update track audio' })
   }
 })
 
-// 레인 항목 볼륨 (문서 + 재생 중이면 라이브 적용): body {id, itemId, volume}
-router.put('/audio_lane/volume', async (req, res) => {
-  try {
-    const { id, itemId, volume } = req.body
-    if (!id || !itemId || volume === undefined) {
-      return res.status(400).json({ error: 'id, itemId and volume are required' })
-    }
-    const result = await setLaneItemVolume(id, itemId, Number(volume))
-    res.status(200).json(result)
-  } catch (error) {
-    logger.error(`Error occurred while updating lane volume: ${error}`)
-    res.status(500).json({ error: 'Failed to update lane volume' })
-  }
-})
-
-// 트랙 부분 갱신 (v2): body {id, idx, patch:{time?,volume?,channel_map?,fade_*?}}
+// 트랙 부분 갱신 (v2): body {id, idx, patch:{time?,volume?,channel_map?,muted?,audios?,fade_*?}}
 router.put('/track', async (req, res) => {
   try {
     const { id, idx, patch } = req.body

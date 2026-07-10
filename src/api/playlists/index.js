@@ -1,10 +1,38 @@
+import { randomUUID } from 'crypto'
 import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
 import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
-import { ensureAudioLane } from './audioLane.js'
+import { syncTrackAudios } from './trackAudio.js'
+
+// 트랙의 추가 오디오 항목들을 파일 정보와 조인 (UI 표시 + 플레이어 전송용 path/metadata)
+const hydrateTrackAudios = async (audios) => {
+  if (!Array.isArray(audios)) return []
+  const results = await Promise.all(
+    audios.map(async (a) => {
+      if (!a?.uuid) return null
+      const af = await dbFiles.findOne({ uuid: a.uuid })
+      if (!af) {
+        logger.warn(`Audio file not found for track audio: ${a.uuid}`)
+        return null
+      }
+      return {
+        id: a.id,
+        uuid: a.uuid,
+        filename: af.filename,
+        path: af.path,
+        metadata: af.metadata, // 채널 라우팅 UI에서 소스 채널수 파싱
+        volume: a.volume ?? 100,
+        channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
+        muted: a.muted ?? false,
+        loop: a.loop ?? false,
+      }
+    }),
+  )
+  return results.filter(Boolean)
+}
 
 const getTrackWithFileInfo = async (tracks) => {
   if (!tracks || !Array.isArray(tracks)) {
@@ -24,9 +52,12 @@ const getTrackWithFileInfo = async (tracks) => {
             // 하이드레이션으로 v1 동작 유지. channel_map은 그대로 플레이어까지 실림.
             volume: track.volume ?? 100,
             channel_map: Array.isArray(track.channel_map) ? track.channel_map : null,
+            muted: track.muted ?? false, // 임베디드 오디오 뮤트
             // 페이드는 Phase C 예약 — 스키마만 확보, 아직 미전송/미적용
             fade_in_ms: track.fade_in_ms ?? 0,
             fade_out_ms: track.fade_out_ms ?? 0,
+            // 트랙 종속 추가 오디오 스택 (임베디드 외 별도 오디오 파일들)
+            audios: await hydrateTrackAudios(track.audios),
           }
         }
         logger.warn(`File not found for track uuid: ${track.uuid}`)
@@ -290,11 +321,34 @@ const editImageTime = async (playlistId, idx, time) => {
 }
 
 // 트랙 영속 필드 부분 갱신 화이트리스트 (파일 문서 필드/uuid는 여기로 못 바꾼다)
-const TRACK_PATCH_KEYS = ['time', 'volume', 'channel_map', 'fade_in_ms', 'fade_out_ms']
+// muted = 임베디드 오디오 뮤트, audios = 트랙 종속 추가 오디오 스택
+const TRACK_PATCH_KEYS = [
+  'time',
+  'volume',
+  'channel_map',
+  'muted',
+  'fade_in_ms',
+  'fade_out_ms',
+  'audios',
+]
 
-// editImageTime의 일반화 — 시간/볼륨/채널 라우팅/페이드 예약 필드를 부분 갱신.
-// 덱 channel_map은 다음 로드부터 적용 (PROTOCOL.md §5.1) — 재생 중이면 트랙 리스트
-// 재전송 + 다음 트랙 프리로드 갱신으로 다음 전환부터 반영된다.
+// 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. UI가 보낸 하이드레이션
+// 필드(filename/path/metadata)는 버리고 영속 형태만 저장한다.
+const normalizeAudios = (audios) =>
+  (Array.isArray(audios) ? audios : [])
+    .filter((a) => a && a.uuid)
+    .map((a) => ({
+      id: a.id || `aud-${randomUUID()}`,
+      uuid: a.uuid,
+      volume: Math.max(0, Math.min(100, Number(a.volume ?? 100))),
+      channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
+      muted: a.muted === true,
+      loop: a.loop === true,
+    }))
+
+// editImageTime의 일반화 — 시간/볼륨/채널 라우팅/뮤트/추가 오디오/페이드 예약 필드 부분 갱신.
+// 덱 channel_map/muted는 다음 로드부터 적용 (PROTOCOL.md §5.1) — 재생 중이면 트랙 리스트
+// 재전송 + 프리로드 갱신으로 다음 전환부터 반영. 추가 오디오는 현재 트랙이면 즉시 재동기화.
 const editTrack = async (id, idx, patch) => {
   try {
     if (!id || idx === undefined || !patch || typeof patch !== 'object') {
@@ -307,7 +361,9 @@ const editTrack = async (id, idx, patch) => {
       return null
     }
     for (const key of TRACK_PATCH_KEYS) {
-      if (key in patch) playlist.tracks[idx][key] = patch[key]
+      if (key in patch) {
+        playlist.tracks[idx][key] = key === 'audios' ? normalizeAudios(patch[key]) : patch[key]
+      }
     }
     const r = await dbPlaylists.update(
       { _id: id },
@@ -325,7 +381,10 @@ const editTrack = async (id, idx, patch) => {
         tracks: pStatus.playlist.tracks,
       })
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
-      if (idx === pStatus.trackId + 1) {
+      if (idx === pStatus.trackId) {
+        // 현재 재생 중인 트랙의 추가 오디오 편집 — 즉시 재동기화 (force)
+        syncTrackAudios(idx, true)
+      } else if (idx === pStatus.trackId + 1) {
         logger.info('Next track settings updated, reloading preload')
         await preloadNextTrack()
       }
@@ -407,8 +466,8 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       `Playing playlist ${playlistId} with ${tracks.length} tracks, starting at track ${trackIdx}, next track preloaded: ${!!nextTrack}, current_time: ${currentTime}, next_time: ${nextTime}`,
     )
 
-    // 병행 오디오 레인: 같은 플레이리스트 내 트랙 점프면 무중단, 아니면 재기동
-    await ensureAudioLane(pStatus.playlist)
+    // 트랙 종속 오디오는 media_changed 피드백(parser)에서 트랙 확정 후 동기화된다 —
+    // 여기서 직접 기동하지 않음 (실제 화면 전환 시점과 일치시키기 위함).
 
     return `Playing playlist ${playlistId} from track ${trackIdx}`
   } catch (error) {
