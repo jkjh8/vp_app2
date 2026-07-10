@@ -64,8 +64,10 @@ router.delete('/:uuid', async (req, res) => {
   try {
     const file = await dbFiles.findOne({ uuid })
     // Delete the uuid folder from the filesystem
+    // rmSync(force): 폴더가 이미 없어도 통과 — 디스크/DB가 어긋난 유령 문서도 지울 수 있게.
+    // (rmdirSync는 deprecated + 부재 경로에서 throw → DB 문서가 영구히 남는 문제)
     const fileDir = path.join(getMediaPath(), uuid)
-    fs.rmdirSync(fileDir, { recursive: true, force: true }) // This will delete the directory and its contents
+    fs.rmSync(fileDir, { recursive: true, force: true })
     // Delete the file record from the database
     await dbFiles.remove({ uuid })
     res.status(200).json({ message: 'File deleted successfully' })

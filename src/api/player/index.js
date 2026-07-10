@@ -6,6 +6,11 @@ import { getLogoPath } from '../files/folders.js'
 import { playerSend } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
+import {
+  stopAudioLane,
+  pauseAudioLane,
+  resumeAudioLane,
+} from '../playlists/audioLane.js'
 import { broadcastEvent } from '../../tcp/index.js'
 import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
@@ -101,6 +106,7 @@ const play = () => {
     if (isPaused) {
       logger.info('Playlist mode: resuming paused track')
       playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
+      resumeAudioLane() // 병행 오디오 레인도 함께 재개
       broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
         fileId: pStatus.file?.number || null,
         filename: pStatus.file?.filename || null,
@@ -168,7 +174,13 @@ const play = () => {
 
 const pause = () => {
   logger.info('Received pause request')
+  // 플레이어의 pause는 토글 — 레인도 토글 전 덱 상태를 따라 같은 방향으로 움직인다
+  const wasPaused = pStatus.player.event === 'paused'
   playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
+  if (pStatus.playlistMode) {
+    if (wasPaused) resumeAudioLane()
+    else pauseAudioLane()
+  }
   broadcastEvent(TCP_EVENTS.PLAY_PAUSED, {
     fileId: pStatus.file?.number || null,
   })
@@ -184,6 +196,7 @@ const stop = () => {
   } else {
     playerSend({ command: 'stop', idx: pStatus.activePlayerId || 0 })
   }
+  stopAudioLane() // 병행 오디오 레인도 일괄 정지 (레인 없으면 no-op)
   broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
   return 'Player stopped'
 }

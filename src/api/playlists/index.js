@@ -4,6 +4,7 @@ import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
+import { ensureAudioLane } from './audioLane.js'
 
 const getTrackWithFileInfo = async (tracks) => {
   if (!tracks || !Array.isArray(tracks)) {
@@ -19,6 +20,13 @@ const getTrackWithFileInfo = async (tracks) => {
           return {
             ...file,
             time: track.time || 0,
+            // v2 라우팅/볼륨 (PROTOCOL.md §5.1) — 구 문서는 필드가 없으므로 기본값
+            // 하이드레이션으로 v1 동작 유지. channel_map은 그대로 플레이어까지 실림.
+            volume: track.volume ?? 100,
+            channel_map: Array.isArray(track.channel_map) ? track.channel_map : null,
+            // 페이드는 Phase C 예약 — 스키마만 확보, 아직 미전송/미적용
+            fade_in_ms: track.fade_in_ms ?? 0,
+            fade_out_ms: track.fade_out_ms ?? 0,
           }
         }
         logger.warn(`File not found for track uuid: ${track.uuid}`)
@@ -281,6 +289,54 @@ const editImageTime = async (playlistId, idx, time) => {
   }
 }
 
+// 트랙 영속 필드 부분 갱신 화이트리스트 (파일 문서 필드/uuid는 여기로 못 바꾼다)
+const TRACK_PATCH_KEYS = ['time', 'volume', 'channel_map', 'fade_in_ms', 'fade_out_ms']
+
+// editImageTime의 일반화 — 시간/볼륨/채널 라우팅/페이드 예약 필드를 부분 갱신.
+// 덱 channel_map은 다음 로드부터 적용 (PROTOCOL.md §5.1) — 재생 중이면 트랙 리스트
+// 재전송 + 다음 트랙 프리로드 갱신으로 다음 전환부터 반영된다.
+const editTrack = async (id, idx, patch) => {
+  try {
+    if (!id || idx === undefined || !patch || typeof patch !== 'object') {
+      logger.error('Invalid parameters for editing track')
+      return null
+    }
+    const playlist = await dbPlaylists.findOne({ _id: id })
+    if (!playlist?.tracks?.[idx]) {
+      logger.error('Track not found for editing')
+      return null
+    }
+    for (const key of TRACK_PATCH_KEYS) {
+      if (key in patch) playlist.tracks[idx][key] = patch[key]
+    }
+    const r = await dbPlaylists.update(
+      { _id: id },
+      { $set: { tracks: playlist.tracks } },
+    )
+
+    // 재생 중인 플레이리스트면 하이드레이션 갱신 + 플레이어 트랙 리스트 재전송
+    if (pStatus.playlistMode && pStatus.playlist?._id === id) {
+      pStatus.playlist = {
+        ...playlist,
+        tracks: await getTrackWithFileInfo(playlist.tracks),
+      }
+      playerSend({
+        command: 'set_tracks',
+        tracks: pStatus.playlist.tracks,
+      })
+      ioClient.emit('pStatus', { playlist: pStatus.playlist })
+      if (idx === pStatus.trackId + 1) {
+        logger.info('Next track settings updated, reloading preload')
+        await preloadNextTrack()
+      }
+    }
+    return r
+  } catch (error) {
+    logger.error(`Error editing track: ${error}`)
+    return null
+  }
+}
+
 const playlistPlay = async (playlistId, trackIdx = 0) => {
   try {
     if (!playlistId) {
@@ -350,6 +406,10 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
     logger.info(
       `Playing playlist ${playlistId} with ${tracks.length} tracks, starting at track ${trackIdx}, next track preloaded: ${!!nextTrack}, current_time: ${currentTime}, next_time: ${nextTime}`,
     )
+
+    // 병행 오디오 레인: 같은 플레이리스트 내 트랙 점프면 무중단, 아니면 재기동
+    await ensureAudioLane(pStatus.playlist)
+
     return `Playing playlist ${playlistId} from track ${trackIdx}`
   } catch (error) {
     logger.error(`Error playing playlist: ${error}`)
@@ -461,6 +521,7 @@ export {
   setPlaylistTrackIndex,
   setPlaylistMode,
   editImageTime,
+  editTrack,
   playlistPlay,
   playNextTrack,
   preloadNextTrack,

@@ -5,11 +5,15 @@ import { playerSend, resolvePlayerResult } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { preloadNextTrack } from '../api/playlists/index.js'
+import { stopAudioLane } from '../api/playlists/audioLane.js'
 import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
 
 let lastEndReachedEvent = null
+// audio_track_data SPA 발신 스로틀 (트랙당 100ms 틱 × N트랙 홍수 방지)
+const audioTrackEmitAt = {}
+const AUDIO_TRACK_EMIT_INTERVAL_MS = 300
 
 // 플레이어 준비 완료 처리
 function handleReady() {
@@ -42,6 +46,9 @@ function handleReady() {
 
 // 재생 종료 이벤트 처리 (호스트에서 제어)
 function handleEndReached(data) {
+  // 타임라인 모드(Phase B): 덱 EOS는 타임라인 엔진 소관 — 플레이리스트 진행 금지
+  if (pStatus.timelineMode) return
+
   const eventKey = `${data.playlist_track_index}-${data.active_player_id}`
   if (lastEndReachedEvent === eventKey) {
     logger.warn(`Duplicate end_reached event ignored: ${eventKey}`)
@@ -87,6 +94,7 @@ function handleEndReached(data) {
       } else {
         logger.info('Playlist ended (none mode)')
         playerSend({ command: 'stop_all' })
+        stopAudioLane() // 메인 레인 종료 = 병행 오디오도 종료 (리핏×레인 매트릭스)
         pStatus.trackId = 0
         ioClient.emit('pStatus', { trackId: pStatus.trackId })
         broadcastEvent(EVENTS.END_REACHED, {})
@@ -111,6 +119,7 @@ function handleEndReached(data) {
     case 'single':
       logger.info('Single track mode, stopping')
       playerSend({ command: 'stop', idx: data.active_player_id })
+      stopAudioLane() // 재생 종료 — 병행 오디오도 종료
       broadcastEvent(EVENTS.END_REACHED, {})
       break
 
@@ -303,6 +312,45 @@ const parsePlayerStatus = async (data) => {
         ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
         logger.debug(`Logo visibility: ${pStatus.logoShow}`)
         break
+
+      // v2 기능 협상 (PROTOCOL.md §5.1) — 신규 명령 송신 게이트
+      case 'capabilities':
+        pStatus.playerFeatures = msgData?.features || []
+        ioClient.emit('pStatus', { playerFeatures: pStatus.playerFeatures })
+        logger.info(`Player capabilities: ${pStatus.playerFeatures.join(', ')}`)
+        break
+
+      // 독립 오디오 트랙 상태 틱 (v2) — pStatus.audioTracks에 병합, SPA로는 스로틀 발신
+      case 'audio_track_data': {
+        const trackId = msgData?.track_id
+        if (!trackId) break
+        if (msgData.state === 'stopped') {
+          // 종료 = 키 삭제 (SPA는 audioTracks를 통째 교체 수신하므로 즉시 반영)
+          delete pStatus.audioTracks[trackId]
+          delete audioTrackEmitAt[trackId]
+          ioClient.emit('pStatus', { audioTracks: pStatus.audioTracks })
+          break
+        }
+        if (!pStatus.audioTracks[trackId]) {
+          pStatus.audioTracks[trackId] = { itemId: trackId }
+        }
+        Object.assign(pStatus.audioTracks[trackId], {
+          time: msgData.time ?? 0,
+          duration: msgData.duration ?? 0,
+          position: msgData.position ?? 0,
+          is_playing: !!msgData.is_playing,
+          state: msgData.state || '',
+        })
+        const now = Date.now()
+        if (
+          !audioTrackEmitAt[trackId] ||
+          now - audioTrackEmitAt[trackId] >= AUDIO_TRACK_EMIT_INTERVAL_MS
+        ) {
+          audioTrackEmitAt[trackId] = now
+          ioClient.emit('pStatus', { audioTracks: pStatus.audioTracks })
+        }
+        break
+      }
 
       // probe_media / make_thumbnail 응답 → 대기 중인 playerRequest resolve (Phase 2.5)
       case 'probe_result':
