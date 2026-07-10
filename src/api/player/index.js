@@ -269,7 +269,7 @@ const setAudioDevice = async (deviceId) => {
   pStatus.audioDevice = deviceId
   await dbStatus.update(
     { type: 'audioDevice' },
-    { $set: { audioDevice: deviceId } },
+    { $set: { value: deviceId } },
     { upsert: true },
   )
   playerSend({ command: 'set_audio_device', device_id: pStatus.audioDevice })

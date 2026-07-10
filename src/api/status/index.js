@@ -15,7 +15,9 @@ const updateStatusFromDb = async () => {
         pStatus.backgroundColor = status.value ?? pStatus.backgroundColor
         break
       case 'audioDevice':
-        pStatus.audioDevice = status.value ?? pStatus.audioDevice
+        // status.audioDevice: 과거 버전이 잘못된 필드명으로 저장한 레코드 호환용
+        pStatus.audioDevice =
+          status.value ?? status.audioDevice ?? pStatus.audioDevice
         break
       case 'logoFile':
         pStatus.logoFile = status.file ?? pStatus.logoFile
