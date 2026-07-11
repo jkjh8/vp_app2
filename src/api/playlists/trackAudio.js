@@ -47,20 +47,85 @@ const startAudio = (audio) => {
   }
 }
 
-// 트랙 전환 시 호출(주로 parser의 media_changed) — 현재 트랙 오디오 전부 정지 후
-// 새 트랙 audios[] 기동. force=true면 같은 트랙이라도 재동기화(편집 반영용).
+// 트랙 전환/편집 시 호출.
+//  · 다른 트랙으로 전환: 현재 오디오 전부 정지 후 새 트랙 audios[] 전체 기동.
+//  · 같은 트랙 편집(force): diff — 추가/삭제/루프변경만 재시작, 볼륨/뮤트/맵은 라이브
+//    (편집마다 전체 재시작하면 재생 중 오디오가 끊기므로).
 const syncTrackAudios = (trackIdx, force = false) => {
   if (!force && trackIdx === currentAudioTrackIdx) return
-  stopAllTrackAudios() // currentAudioTrackIdx = -1 로 리셋됨
-  currentAudioTrackIdx = trackIdx
-  if (!laneSupported()) return
   const track = (pStatus.playlist?.tracks || [])[trackIdx]
-  const audios = (track?.audios || []).filter((a) => a && a.path)
-  for (const a of audios) startAudio(a)
-  if (audios.length) {
-    logger.info(`trackAudio: started ${audios.length} audio(s) for track ${trackIdx}`)
-    emit()
+  const desired = (track?.audios || []).filter((a) => a && a.path)
+
+  // 트랙 전환 = 전체 교체
+  if (trackIdx !== currentAudioTrackIdx) {
+    stopAllTrackAudios() // currentAudioTrackIdx = -1
+    currentAudioTrackIdx = trackIdx
+    if (!laneSupported()) return
+    for (const a of desired) startAudio(a)
+    if (desired.length) {
+      logger.info(`trackAudio: started ${desired.length} audio(s) for track ${trackIdx}`)
+      emit()
+    }
+    return
   }
+
+  // 같은 트랙 편집 = diff 라이브
+  if (!laneSupported()) return
+  const desiredById = new Map(desired.map((a) => [a.id, a]))
+  // 삭제된 항목 정지
+  for (const id of Object.keys(pStatus.audioTracks)) {
+    if (!desiredById.has(id)) {
+      playerSend({ command: 'audio_track_stop', track_id: id })
+      delete pStatus.audioTracks[id]
+    }
+  }
+  // 추가/변경
+  for (const a of desired) {
+    const cur = pStatus.audioTracks[a.id]
+    if (!cur) {
+      startAudio(a) // 신규
+      continue
+    }
+    // 루프 변경은 플레이어 loop가 play 시점 고정이라 재시작 필요
+    if ((a.loop === true) !== cur.loop) {
+      playerSend({ command: 'audio_track_stop', track_id: a.id })
+      delete pStatus.audioTracks[a.id]
+      startAudio(a)
+      continue
+    }
+    // 볼륨/뮤트 라이브 (실효 볼륨 = muted ? 0 : volume)
+    const nextVol = a.volume ?? 100
+    const nextMuted = a.muted === true
+    if (nextVol !== cur.volume || nextMuted !== cur.muted) {
+      playerSend({
+        command: 'audio_track_set_volume',
+        track_id: a.id,
+        volume: nextMuted ? 0 : nextVol,
+      })
+      cur.volume = nextVol
+      cur.muted = nextMuted
+    }
+    // 채널 라우팅 라이브
+    const nextMap = Array.isArray(a.channel_map) ? a.channel_map : null
+    if (JSON.stringify(nextMap) !== JSON.stringify(cur.channel_map)) {
+      playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextMap || [] })
+      cur.channel_map = nextMap
+    }
+  }
+  emit()
+}
+
+// 활성 덱(임베디드 오디오)의 라우팅/볼륨/뮤트 라이브 변경. live_routing capability 필요.
+const setDeckAudioLive = ({ channel_map, volume, muted } = {}) => {
+  if (!Array.isArray(pStatus.playerFeatures) || !pStatus.playerFeatures.includes('live_routing')) {
+    return false
+  }
+  const cmd = { command: 'set_deck_audio' }
+  if (channel_map !== undefined) cmd.channel_map = channel_map || []
+  if (volume !== undefined) cmd.volume = volume
+  if (muted !== undefined) cmd.muted = muted
+  playerSend(cmd)
+  return true
 }
 
 const stopAllTrackAudios = () => {
@@ -109,4 +174,5 @@ export {
   pauseTrackAudios,
   resumeTrackAudios,
   setTrackAudioLive,
+  setDeckAudioLive,
 }

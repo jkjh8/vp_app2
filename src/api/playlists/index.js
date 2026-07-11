@@ -5,7 +5,7 @@ import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
-import { syncTrackAudios } from './trackAudio.js'
+import { syncTrackAudios, setDeckAudioLive } from './trackAudio.js'
 
 // 트랙의 추가 오디오 항목들을 파일 정보와 조인 (UI 표시 + 플레이어 전송용 path/metadata)
 const hydrateTrackAudios = async (audios) => {
@@ -382,8 +382,13 @@ const editTrack = async (id, idx, patch) => {
       })
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
       if (idx === pStatus.trackId) {
-        // 현재 재생 중인 트랙의 추가 오디오 편집 — 즉시 재동기화 (force)
-        syncTrackAudios(idx, true)
+        // 현재 재생 중인 트랙 — 임베디드 오디오는 덱 라이브 변경, 추가 오디오는 diff 라이브
+        const embedded = {}
+        if ('channel_map' in patch) embedded.channel_map = patch.channel_map
+        if ('volume' in patch) embedded.volume = patch.volume
+        if ('muted' in patch) embedded.muted = patch.muted
+        if (Object.keys(embedded).length) setDeckAudioLive(embedded)
+        if ('audios' in patch) syncTrackAudios(idx, true)
       } else if (idx === pStatus.trackId + 1) {
         logger.info('Next track settings updated, reloading preload')
         await preloadNextTrack()

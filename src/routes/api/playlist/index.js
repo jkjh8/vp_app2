@@ -13,7 +13,7 @@ import {
   editTrack,
   preloadNextTrack,
 } from '../../../api/playlists/index.js'
-import { setTrackAudioLive } from '../../../api/playlists/trackAudio.js'
+import { setTrackAudioLive, setDeckAudioLive } from '../../../api/playlists/trackAudio.js'
 
 const router = express.Router()
 
@@ -89,6 +89,19 @@ router.get('/play', async (req, res) => {
   } catch (error) {
     logger.error(`Error occurred while playing playlist: ${error}`)
     res.status(500).json({ error: 'Failed to play playlist' })
+  }
+})
+
+// 현재 재생 트랙의 임베디드 오디오 라이브 변경 (볼륨 드래그 등 — 재조회 없이 즉시).
+// 영속화는 PUT /track patch. body {channel_map?, volume?, muted?}
+router.put('/deck_audio/live', async (req, res) => {
+  try {
+    const { channel_map, volume, muted } = req.body
+    const ok = setDeckAudioLive({ channel_map, volume, muted })
+    res.status(200).json({ ok })
+  } catch (error) {
+    logger.error(`Error occurred while updating deck audio live: ${error}`)
+    res.status(500).json({ error: 'Failed to update deck audio' })
   }
 })
 
