@@ -9,11 +9,15 @@ import {
   editPlaylist,
   setTracksToPlaylist,
   playlistPlay,
+  setPlaylistMode,
   editImageTime,
   editTrack,
   preloadNextTrack,
 } from '../../../api/playlists/index.js'
-import { setTrackAudioLive, setDeckAudioLive } from '../../../api/playlists/trackAudio.js'
+import {
+  setTrackAudioLive,
+  setDeckAudioLive,
+} from '../../../api/playlists/trackAudio.js'
 
 const router = express.Router()
 
@@ -85,10 +89,32 @@ router.get('/play', async (req, res) => {
   try {
     const { playlistId, trackIndex } = req.query
     const result = await playlistPlay(Number(playlistId), Number(trackIndex))
+    if (!result) {
+      // playlistPlay는 실패 시 null을 반환 — 이전엔 여기서도 무조건 200을 내려보내
+      // 클라이언트가 "재생 성공"으로 착각하는 조용한 실패였다 (플레이어 미연결 등).
+      return res
+        .status(503)
+        .json({
+          error:
+            'Failed to play playlist (player not connected or playlist unavailable)',
+        })
+    }
     res.status(200).json(result)
   } catch (error) {
     logger.error(`Error occurred while playing playlist: ${error}`)
     res.status(500).json({ error: 'Failed to play playlist' })
+  }
+})
+
+// 플레이리스트 모드 명시적 토글 (UI 스위치). body {value:boolean}
+router.put('/mode', async (req, res) => {
+  try {
+    const { value } = req.body
+    const mode = await setPlaylistMode(Boolean(value))
+    res.status(200).json({ playlistMode: mode })
+  } catch (error) {
+    logger.error(`Error occurred while toggling playlist mode: ${error}`)
+    res.status(500).json({ error: 'Failed to toggle playlist mode' })
   }
 })
 

@@ -13,7 +13,8 @@ let pStatus = {
   audioDevices: [],
   audioDevice: '',
   logoFile: '',
-  logoShow: true,
+  logoShow: true, // 사용자 선호값 (show_logo 커맨드로 설정)
+  logoVisible: false, // 실제 화면 표시 여부 (logo_visibility 피드백, §2.7 자동 규칙 반영 결과)
   logoSize: 0,
   file: {},
   player: {

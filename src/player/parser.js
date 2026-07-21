@@ -5,7 +5,10 @@ import { playerSend, resolvePlayerResult } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
 import { preloadNextTrack } from '../api/playlists/index.js'
-import { stopAllTrackAudios, syncTrackAudios } from '../api/playlists/trackAudio.js'
+import {
+  stopAllTrackAudios,
+  syncTrackAudios,
+} from '../api/playlists/trackAudio.js'
 import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
@@ -313,9 +316,13 @@ const parsePlayerStatus = async (data) => {
         break
 
       case 'logo_visibility':
-        pStatus.logoShow = msgData.show
-        ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
-        logger.debug(`Logo visibility: ${pStatus.logoShow}`)
+        // 플레이어가 미디어 타입(비디오/이미지=숨김, 오디오=표시, §2.7)에 따라 자동
+        // 계산한 "지금 실제로 보이는지" 값이다. 사용자가 Show Logo 토글로 설정한
+        // 선호값(pStatus.logoShow)과는 별개 — 여기서 logoShow를 덮어쓰면 비디오 재생
+        // 중 토글을 켜자마자 곧바로 false 피드백에 되밟혀 꺼지는 버그가 된다.
+        pStatus.logoVisible = msgData.show
+        ioClient.emit('pStatus', { logoVisible: pStatus.logoVisible })
+        logger.debug(`Logo visibility: ${pStatus.logoVisible}`)
         break
 
       // v2 기능 협상 (PROTOCOL.md §5.1) — 신규 명령 송신 게이트

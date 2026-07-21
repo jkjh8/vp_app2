@@ -22,14 +22,17 @@ const emit = () => ioClient.emit('pStatus', { audioTracks: pStatus.audioTracks }
 
 // 하이드레이션된 audio 항목({id,uuid,filename,path,volume,channel_map,muted,loop}) 하나를 기동
 const startAudio = (audio) => {
+  const hasChannels = Array.isArray(audio.channels) && audio.channels.length > 0
   playerSend({
     command: 'audio_track_play',
     track_id: audio.id,
     file: { path: audio.path, uuid: audio.uuid },
-    volume: audio.volume ?? 100,
-    channel_map: Array.isArray(audio.channel_map) ? audio.channel_map : undefined,
+    volume: audio.volume ?? 100, // 마스터
+    // 채널별 우선(channels), 없으면 레거시 channel_map
+    channels: hasChannels ? audio.channels : undefined,
+    channel_map: !hasChannels && Array.isArray(audio.channel_map) ? audio.channel_map : undefined,
     loop: audio.loop === true,
-    muted: audio.muted === true,
+    muted: audio.muted === true, // 마스터
   })
   pStatus.audioTracks[audio.id] = {
     id: audio.id,
@@ -39,6 +42,7 @@ const startAudio = (audio) => {
     muted: audio.muted === true,
     loop: audio.loop === true,
     channel_map: Array.isArray(audio.channel_map) ? audio.channel_map : null,
+    channels: hasChannels ? audio.channels : null,
     time: 0,
     duration: 0,
     position: 0,
@@ -105,22 +109,32 @@ const syncTrackAudios = (trackIdx, force = false) => {
       cur.volume = nextVol
       cur.muted = nextMuted
     }
-    // 채널 라우팅 라이브
-    const nextMap = Array.isArray(a.channel_map) ? a.channel_map : null
-    if (JSON.stringify(nextMap) !== JSON.stringify(cur.channel_map)) {
-      playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextMap || [] })
-      cur.channel_map = nextMap
+    // 채널 라우팅 라이브 — 채널별(channels) 우선, 없으면 레거시 channel_map
+    const nextChannels = Array.isArray(a.channels) ? a.channels : null
+    if (nextChannels) {
+      if (JSON.stringify(nextChannels) !== JSON.stringify(cur.channels)) {
+        playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextChannels })
+        cur.channels = nextChannels
+      }
+    } else {
+      const nextMap = Array.isArray(a.channel_map) ? a.channel_map : null
+      if (JSON.stringify(nextMap) !== JSON.stringify(cur.channel_map)) {
+        playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextMap || [] })
+        cur.channel_map = nextMap
+      }
     }
   }
   emit()
 }
 
 // 활성 덱(임베디드 오디오)의 라우팅/볼륨/뮤트 라이브 변경. live_routing capability 필요.
-const setDeckAudioLive = ({ channel_map, volume, muted } = {}) => {
+// streams(채널별 스트림>채널) 우선, 없으면 레거시 {channel_map,volume,muted}.
+const setDeckAudioLive = ({ streams, channel_map, volume, muted } = {}) => {
   if (!Array.isArray(pStatus.playerFeatures) || !pStatus.playerFeatures.includes('live_routing')) {
     return false
   }
   const cmd = { command: 'set_deck_audio' }
+  if (Array.isArray(streams)) cmd.streams = streams
   if (channel_map !== undefined) cmd.channel_map = channel_map || []
   if (volume !== undefined) cmd.volume = volume
   if (muted !== undefined) cmd.muted = muted

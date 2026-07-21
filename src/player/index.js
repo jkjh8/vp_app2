@@ -28,7 +28,11 @@ const resolveNativePlayer = () => {
   }
   // 배포: player/vplayer.exe + 동봉된 gst-bundle (vplayer가 스스로 GST_PLUGIN_PATH 설정)
   const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
-  return { exe: path.join(appDir, 'player', 'vplayer.exe'), args: [], extraPath: null }
+  return {
+    exe: path.join(appDir, 'player', 'vplayer.exe'),
+    args: [],
+    extraPath: null,
+  }
 }
 
 const resolvePythonPlayer = () => {
@@ -217,10 +221,13 @@ const stopPlayer = () => {
   logger.info('Python player process has been terminated.')
 }
 
+// 소켓이 연결돼 실제로 플레이어에 명령을 보낼 수 있는 상태인지 (재생 커맨드 전 사전 확인용)
+const isPlayerConnected = () => !!socket && !socket.destroyed
+
 const playerSend = (command) => {
-  if (!socket || socket.destroyed) {
+  if (!isPlayerConnected()) {
     logger.warn('Socket not connected to player.')
-    return
+    return false
   }
 
   // Remove undefined values from command
@@ -239,6 +246,7 @@ const playerSend = (command) => {
       logger.info(`Command sent to player: ${message.trim()}`)
     }
   })
+  return true
 }
 
 // --- 요청/응답 (probe_media, make_thumbnail 등) ---------------------------------
@@ -279,4 +287,11 @@ const resolvePlayerResult = (data) => {
   }
 }
 
-export { startPlayer, stopPlayer, playerSend, playerRequest, resolvePlayerResult }
+export {
+  startPlayer,
+  stopPlayer,
+  playerSend,
+  playerRequest,
+  resolvePlayerResult,
+  isPlayerConnected,
+}

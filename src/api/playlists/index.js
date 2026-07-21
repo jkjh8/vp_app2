@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
 import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
-import { playerSend } from '../../player/index.js'
+import { playerSend, isPlayerConnected } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
 import { syncTrackAudios, setDeckAudioLive } from './trackAudio.js'
@@ -24,9 +24,10 @@ const hydrateTrackAudios = async (audios) => {
         filename: af.filename,
         path: af.path,
         metadata: af.metadata, // 채널 라우팅 UI에서 소스 채널수 파싱
-        volume: a.volume ?? 100,
-        channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
-        muted: a.muted ?? false,
+        volume: a.volume ?? 100, // 마스터
+        channel_map: Array.isArray(a.channel_map) ? a.channel_map : null, // 레거시
+        channels: Array.isArray(a.channels) ? a.channels : null, // 채널별 [{out,volume,muted}]
+        muted: a.muted ?? false, // 마스터
         loop: a.loop ?? false,
       }
     }),
@@ -50,9 +51,16 @@ const getTrackWithFileInfo = async (tracks) => {
             time: track.time || 0,
             // v2 라우팅/볼륨 (PROTOCOL.md §5.1) — 구 문서는 필드가 없으므로 기본값
             // 하이드레이션으로 v1 동작 유지. channel_map은 그대로 플레이어까지 실림.
-            volume: track.volume ?? 100,
-            channel_map: Array.isArray(track.channel_map) ? track.channel_map : null,
-            muted: track.muted ?? false, // 임베디드 오디오 뮤트
+            volume: track.volume ?? 100, // 레거시 마스터
+            channel_map: Array.isArray(track.channel_map)
+              ? track.channel_map
+              : null, // 레거시
+            muted: track.muted ?? false, // 레거시 마스터 뮤트
+            // 채널별 임베디드 오디오 (스트림>채널). 있으면 플레이어가 channel_map보다 우선.
+            // 기본값(스트림/채널 채우기)은 UI가 metadata.streams로 병합 — 여기선 영속값만 통과.
+            embedded_streams: Array.isArray(track.embedded_streams)
+              ? track.embedded_streams
+              : null,
             // 페이드는 Phase C 예약 — 스키마만 확보, 아직 미전송/미적용
             fade_in_ms: track.fade_in_ms ?? 0,
             fade_out_ms: track.fade_out_ms ?? 0,
@@ -71,6 +79,22 @@ const getTrackWithFileInfo = async (tracks) => {
 
   // Filter out null/undefined values
   return results.filter((item) => item !== null && item !== undefined)
+}
+
+// 이미지 트랙의 표시 시간(초) 결정.
+// - time이 명시적으로(0이 아닌 값) 설정돼 있으면 그 값을 강제 사용.
+// - time이 0/미설정이면 붙어있는 추가 오디오의 길이(metadata.format.duration, 초 단위
+//   문자열 — vplayer probe_media가 std::to_string(double)로 내려줌)를 사용.
+// - 오디오가 없거나 길이를 못 구하면 기존 기본값 5초로 폴백.
+const resolveImageTime = (track) => {
+  if (!track?.is_image) return undefined
+  if (track.time) return track.time
+  const audios = Array.isArray(track.audios) ? track.audios : []
+  for (const a of audios) {
+    const dur = parseFloat(a?.metadata?.format?.duration)
+    if (Number.isFinite(dur) && dur > 0) return dur
+  }
+  return 5
 }
 
 const getPlaylist = async (playlistId) => {
@@ -327,10 +351,19 @@ const TRACK_PATCH_KEYS = [
   'volume',
   'channel_map',
   'muted',
+  'embedded_streams', // 채널별 임베디드 오디오 [{index,volume,muted,channels:[{out,volume,muted}]}]
   'fade_in_ms',
   'fade_out_ms',
   'audios',
 ]
+
+// 채널별 [{out,volume,muted}] 정규화
+const normalizeChannels = (channels) =>
+  (Array.isArray(channels) ? channels : []).map((c) => ({
+    out: Number.isInteger(c?.out) ? c.out : -1,
+    volume: Math.max(0, Math.min(100, Number(c?.volume ?? 100))),
+    muted: c?.muted === true,
+  }))
 
 // 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. UI가 보낸 하이드레이션
 // 필드(filename/path/metadata)는 버리고 영속 형태만 저장한다.
@@ -342,6 +375,9 @@ const normalizeAudios = (audios) =>
       uuid: a.uuid,
       volume: Math.max(0, Math.min(100, Number(a.volume ?? 100))),
       channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
+      channels: Array.isArray(a.channels)
+        ? normalizeChannels(a.channels)
+        : null,
       muted: a.muted === true,
       loop: a.loop === true,
     }))
@@ -362,7 +398,18 @@ const editTrack = async (id, idx, patch) => {
     }
     for (const key of TRACK_PATCH_KEYS) {
       if (key in patch) {
-        playlist.tracks[idx][key] = key === 'audios' ? normalizeAudios(patch[key]) : patch[key]
+        if (key === 'audios')
+          playlist.tracks[idx][key] = normalizeAudios(patch[key])
+        else if (key === 'embedded_streams') {
+          playlist.tracks[idx][key] = (
+            Array.isArray(patch[key]) ? patch[key] : []
+          ).map((s) => ({
+            index: Number.isInteger(s?.index) ? s.index : 0,
+            volume: Math.max(0, Math.min(100, Number(s?.volume ?? 100))),
+            muted: s?.muted === true,
+            channels: normalizeChannels(s?.channels),
+          }))
+        } else playlist.tracks[idx][key] = patch[key]
       }
     }
     const r = await dbPlaylists.update(
@@ -383,11 +430,16 @@ const editTrack = async (id, idx, patch) => {
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
       if (idx === pStatus.trackId) {
         // 현재 재생 중인 트랙 — 임베디드 오디오는 덱 라이브 변경, 추가 오디오는 diff 라이브
-        const embedded = {}
-        if ('channel_map' in patch) embedded.channel_map = patch.channel_map
-        if ('volume' in patch) embedded.volume = patch.volume
-        if ('muted' in patch) embedded.muted = patch.muted
-        if (Object.keys(embedded).length) setDeckAudioLive(embedded)
+        if ('embedded_streams' in patch) {
+          // 채널별(스트림>채널) 라이브
+          setDeckAudioLive({ streams: playlist.tracks[idx].embedded_streams })
+        } else {
+          const embedded = {}
+          if ('channel_map' in patch) embedded.channel_map = patch.channel_map
+          if ('volume' in patch) embedded.volume = patch.volume
+          if ('muted' in patch) embedded.muted = patch.muted
+          if (Object.keys(embedded).length) setDeckAudioLive(embedded)
+        }
         if ('audios' in patch) syncTrackAudios(idx, true)
       } else if (idx === pStatus.trackId + 1) {
         logger.info('Next track settings updated, reloading preload')
@@ -405,6 +457,12 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
   try {
     if (!playlistId) {
       logger.error('Playlist ID is required for playback')
+      return null
+    }
+    if (!isPlayerConnected()) {
+      // 소켓 미연결 상태에서 진행하면 pStatus만 "재생 중"으로 갱신되고 실제로는 아무 명령도
+      // 전달되지 않는 조용한 실패가 된다 (예: 앱 기동 직후 플레이어 연결 완료 전 클릭).
+      logger.error('Cannot play playlist — player socket not connected')
       return null
     }
     if (
@@ -451,11 +509,9 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       tracks: tracks,
     })
 
-    // 현재 트랙의 이미지 시간 (없으면 기본값 5초 사용)
-    const currentTime = currentTrack.is_image
-      ? currentTrack.time || 5
-      : undefined
-    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
+    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    const currentTime = resolveImageTime(currentTrack)
+    const nextTime = resolveImageTime(nextTrack)
 
     // 현재 파일 재생 및 다음 파일 미리 로드
     playerSend({
@@ -508,11 +564,9 @@ const playNextTrack = async () => {
 
     ioClient.emit('pStatus', { trackId: pStatus.trackId })
 
-    // 현재 트랙의 이미지 시간 (없으면 기본값 5초 사용)
-    const currentTime = currentTrack.is_image
-      ? currentTrack.time || 5
-      : undefined
-    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
+    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    const currentTime = resolveImageTime(currentTrack)
+    const nextTime = resolveImageTime(nextTrack)
 
     playerSend({
       command: 'play_current_and_load_next',
@@ -554,8 +608,8 @@ const preloadNextTrack = async () => {
       return null
     }
 
-    // 다음 트랙의 이미지 시간 (없으면 기본값 5초 사용)
-    const nextTime = nextTrack.is_image ? nextTrack.time || 5 : undefined
+    // 다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    const nextTime = resolveImageTime(nextTrack)
 
     playerSend({
       command: 'preload_next',
