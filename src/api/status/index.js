@@ -40,6 +40,28 @@ const updateStatusFromDb = async () => {
       case 'imageTime':
         pStatus.imageTime = status.value ?? pStatus.imageTime
         break
+      case 'display':
+        pStatus.display = { ...pStatus.display, ...(status.value ?? {}) }
+        break
+      case 'windows':
+        // 멀티 윈도우(v3) 사용자 정의 출력 창 목록
+        pStatus.windows = Array.isArray(status.value) ? status.value : pStatus.windows
+        break
+      case 'preload':
+        // 프리롤 설정 (lookahead/max_decks)
+        if (status.value && typeof status.value === 'object') {
+          if (Number.isInteger(status.value.lookahead))
+            pStatus.preloadLookahead = status.value.lookahead
+          if (Number.isInteger(status.value.maxDecks))
+            pStatus.preloadMaxDecks = status.value.maxDecks
+        }
+        break
+      case 'sync':
+        // 멀티 PC 동기 설정 (role/domain/peers/multicast/lead)
+        if (status.value && typeof status.value === 'object') {
+          pStatus.sync = { ...pStatus.sync, ...status.value, ptp: pStatus.sync.ptp }
+        }
+        break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
     }

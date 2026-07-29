@@ -6,6 +6,7 @@ let db = null
 let dbStatus = null
 let dbFiles = null
 let dbPlaylists = null
+let dbTimelines = null
 
 const addTimestamps = (store) => {
   const originalInsert = store.insert
@@ -53,11 +54,18 @@ const initDb = () => {
         autoload: true,
       }),
     ),
+    timelines: addTimestamps(
+      Datastore.create({
+        filename: path.join(dbPath, 'timelines.db'),
+        autoload: true,
+      }),
+    ),
   }
   dbStatus = db.status
   dbFiles = db.files
   dbPlaylists = db.playlists
+  dbTimelines = db.timelines
   return db
 }
-export { initDb, dbStatus, dbFiles, dbPlaylists }
+export { initDb, dbStatus, dbFiles, dbPlaylists, dbTimelines }
 export default db

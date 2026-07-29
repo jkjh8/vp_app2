@@ -8,10 +8,21 @@ import {
   setBackground,
   getAudioDevices,
   setAudioDevice,
+  getDisplays,
+  setDisplay,
   setRepeat,
   setNext,
   setPrevious,
 } from '../../../api/player/index.js'
+import {
+  listWindows,
+  createWindow,
+  updateWindow,
+  deleteWindow,
+  setPreloadConfig,
+} from '../../../api/player/windows.js'
+import { configureSync } from '../../../api/player/peerSync.js'
+import pStatus from '../../../pStatus.js'
 import { logger } from '../../../logger/index.js'
 
 const router = express.Router()
@@ -128,6 +139,87 @@ router.get('/audio_devices', (req, res) => {
   } catch (error) {
     logger.error('Error occurred while fetching audio devices:', error)
     res.status(500).json({ error: 'Failed to fetch audio devices' })
+  }
+})
+
+router.get('/displays', (req, res) => {
+  try {
+    const result = getDisplays()
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error('Error occurred while fetching displays:', error)
+    res.status(500).json({ error: 'Failed to fetch displays' })
+  }
+})
+
+router.put('/display', async (req, res) => {
+  try {
+    const result = await setDisplay(req.body)
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error('Error occurred while setting display:', error)
+    res.status(500).json({ error: 'Failed to set display' })
+  }
+})
+
+// --- 멀티 윈도우(v3) 출력 창 설정 -------------------------------------------
+router.get('/windows', (req, res) => {
+  res.status(200).json(listWindows())
+})
+
+router.post('/windows', async (req, res) => {
+  try {
+    const win = await createWindow(req.body || {})
+    res.status(200).json({ window: win })
+  } catch (error) {
+    logger.error('Error creating window:', error)
+    res.status(500).json({ error: 'Failed to create window' })
+  }
+})
+
+router.put('/windows/:id', async (req, res) => {
+  try {
+    const win = await updateWindow(req.params.id, req.body || {})
+    if (!win) return res.status(404).json({ error: 'window not found' })
+    res.status(200).json({ window: win })
+  } catch (error) {
+    logger.error('Error updating window:', error)
+    res.status(500).json({ error: 'Failed to update window' })
+  }
+})
+
+router.delete('/windows/:id', async (req, res) => {
+  try {
+    await deleteWindow(req.params.id)
+    res.status(200).json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting window:', error)
+    res.status(500).json({ error: 'Failed to delete window' })
+  }
+})
+
+router.put('/preload', async (req, res) => {
+  try {
+    const result = await setPreloadConfig(req.body || {})
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error('Error setting preload config:', error)
+    res.status(500).json({ error: 'Failed to set preload config' })
+  }
+})
+
+// --- 멀티 PC 클럭 동기(v3 Phase 5) --------------------------------------------
+router.get('/sync', (req, res) => {
+  res.status(200).json(pStatus.sync)
+})
+
+router.put('/sync', async (req, res) => {
+  try {
+    const result = await configureSync(req.body || {})
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error('Error configuring sync:', error)
+    res.status(500).json({ error: 'Failed to configure sync' })
   }
 })
 

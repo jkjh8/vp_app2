@@ -4,7 +4,12 @@ import { ioClient } from '../web/index.js'
 import { playerSend, resolvePlayerResult } from './index.js'
 import { dbStatus, dbFiles } from '../db/index.js'
 import { playFile, play, stop } from '../api/player/index.js'
-import { preloadNextTrack } from '../api/playlists/index.js'
+import {
+  preloadNextTrack,
+  multiWin,
+  advanceWindowOnEnd,
+  groupTracksByWindow,
+} from '../api/playlists/index.js'
 import {
   stopAllTrackAudios,
   syncTrackAudios,
@@ -17,6 +22,9 @@ let lastEndReachedEvent = null
 // audio_track_data SPA 발신 스로틀 (트랙당 100ms 틱 × N트랙 홍수 방지)
 const audioTrackEmitAt = {}
 const AUDIO_TRACK_EMIT_INTERVAL_MS = 300
+// timeline_position SPA 발신 스로틀 (플레이어 250ms 틱을 SPA엔 ~200ms로 통과)
+let timelinePosEmitAt = 0
+const TIMELINE_POS_EMIT_INTERVAL_MS = 200
 
 // 플레이어 준비 완료 처리
 function handleReady() {
@@ -29,6 +37,7 @@ function handleReady() {
   const commands = [
     { command: 'background_color', color: pStatus.backgroundColor },
     pStatus.fullscreen && { command: 'set_fullscreen', value: true },
+    { command: 'get_displays' }, // 현재 감지된 모니터 목록 조회 (CLI 인자로 배치는 이미 완료)
     { command: 'get_audio_devices' }, // 디바이스 목록 먼저 조회
     // set_audio_device는 audiodevices 이벤트 받은 후에 호출
     pStatus.playlistMode && {
@@ -52,7 +61,9 @@ function handleEndReached(data) {
   // 타임라인 모드(Phase B): 덱 EOS는 타임라인 엔진 소관 — 플레이리스트 진행 금지
   if (pStatus.timelineMode) return
 
-  const eventKey = `${data.playlist_track_index}-${data.active_player_id}`
+  // 멀티 윈도우(v3): dedup 키에 window_id 포함 (창별 독립 진행). 기본 0 = 하위호환.
+  const winId = data.window_id ?? 0
+  const eventKey = `${winId}-${data.playlist_track_index}-${data.active_player_id}`
   if (lastEndReachedEvent === eventKey) {
     logger.warn(`Duplicate end_reached event ignored: ${eventKey}`)
     return
@@ -60,11 +71,18 @@ function handleEndReached(data) {
   lastEndReachedEvent = eventKey
 
   logger.info(
-    `End reached event - track: ${data.playlist_track_index}, player: ${data.active_player_id}`,
+    `End reached - win: ${winId}, track: ${data.playlist_track_index}, player: ${data.active_player_id}`,
   )
 
   const repeat = pStatus.repeat
   const playlistMode = pStatus.playlistMode
+
+  // 멀티 윈도우(v3): 창별 독립 진행 — 해당 창 커서만 전진
+  if (playlistMode && multiWin()) {
+    advanceWindowOnEnd(data)
+    broadcastEvent(EVENTS.TRACK_ENDED, { window_id: winId })
+    return
+  }
 
   if (!playlistMode) {
     // 일반 재생 모드 처리
@@ -141,6 +159,51 @@ function handleEndReached(data) {
 
 // 미디어 변경 이벤트 처리
 async function handleMediaChanged(data) {
+  // 타임라인 모드: 스케줄러가 덱을 위치로 구동하므로 media_changed는 무시
+  // (플레이어도 억제하지만 신구 혼용/레이스 방어). §5.2 모드 상호배타.
+  if (pStatus.timelineMode) return
+
+  // 멀티 윈도우(v3): 창별 상태 갱신 + 창 서브시퀀스 인덱스 → 글로벌 인덱스 매핑
+  if (pStatus.playlistMode && multiWin()) {
+    const W = data.window_id ?? 0
+    logger.info(`Media changed: win=${W} seq=${data.playlist_track_index} uuid=${data.uuid}`)
+    const file = data.uuid ? await dbFiles.findOne({ uuid: data.uuid }) : null
+    const tracks = pStatus.playlist?.tracks || []
+    const groups = groupTracksByWindow(tracks)
+    const seq = groups.get(W) || []
+    const seqIdx =
+      typeof data.playlist_track_index === 'number' ? data.playlist_track_index : null
+    const globalIdx = seqIdx != null && seq[seqIdx] ? seq[seqIdx].gIdx : null
+
+    if (!pStatus.windowStates[W]) pStatus.windowStates[W] = {}
+    const st = pStatus.windowStates[W]
+    if (seqIdx != null) st.seqIndex = seqIdx
+    if (globalIdx != null) st.trackId = globalIdx
+    if (typeof data.idx === 'number') st.activePlayerId = data.idx
+
+    // 주 창(0 또는 유일 창) → 하위호환 단일 필드 + 트랙 종속 오디오 동기화
+    // (트랙 오디오는 전역 amix 단일 스택이라 주 창 기준으로만 동기화 — 창 간 경합 회피)
+    const primaryW = groups.has(0) ? 0 : [...groups.keys()][0]
+    if (W === primaryW) {
+      if (file) pStatus.file = file
+      if (globalIdx != null) pStatus.trackId = globalIdx
+      if (globalIdx != null) syncTrackAudios(globalIdx)
+    }
+    ioClient.emit('pStatus', {
+      windowStates: pStatus.windowStates,
+      file: pStatus.file,
+      trackId: pStatus.trackId,
+    })
+    broadcastEvent(EVENTS.MEDIA_CHANGED, {
+      fileId: file?.number ?? null,
+      filename: file?.filename ?? null,
+      trackId: st.trackId,
+      windowId: W,
+      playlistId: pStatus.playlist?.playlistId ?? null,
+    })
+    return
+  }
+
   logger.info(`Media changed event: idx=${data.idx}, uuid=${data.uuid}`)
 
   let updated = false
@@ -295,6 +358,32 @@ const parsePlayerStatus = async (data) => {
         logger.info(`Fullscreen mode set to: ${pStatus.fullscreen}`)
         break
 
+      case 'displays':
+        pStatus.displays = msgData.displays || []
+        ioClient.emit('pStatus', { displays: pStatus.displays })
+        logger.info(`Displays updated: ${pStatus.displays.length} monitors`)
+        break
+
+      case 'set_display':
+        // vplayer가 적용한 값을 그대로 echo — pStatus를 실제 반영값으로 동기화
+        pStatus.display = {
+          ...pStatus.display,
+          monitorIndex: msgData.monitor_index ?? pStatus.display.monitorIndex,
+          x: msgData.x ?? pStatus.display.x,
+          y: msgData.y ?? pStatus.display.y,
+          width: msgData.width ?? pStatus.display.width,
+          height: msgData.height ?? pStatus.display.height,
+          aspectMode: msgData.aspect_mode ?? pStatus.display.aspectMode,
+        }
+        await dbStatus.update(
+          { type: 'display' },
+          { $set: { value: pStatus.display } },
+          { upsert: true },
+        )
+        ioClient.emit('pStatus', { display: pStatus.display })
+        logger.info(`Display settings applied: ${JSON.stringify(pStatus.display)}`)
+        break
+
       case 'set_background':
         // 프로토콜상 data는 색상 문자열 원시값 (구현체에 따라 {background} 방어)
         pStatus.backgroundColor =
@@ -330,7 +419,54 @@ const parsePlayerStatus = async (data) => {
         pStatus.playerFeatures = msgData?.features || []
         ioClient.emit('pStatus', { playerFeatures: pStatus.playerFeatures })
         logger.info(`Player capabilities: ${pStatus.playerFeatures.join(', ')}`)
+        // 멀티 윈도우(v3): 프리롤 설정 + 설정된 출력 창 생성 (capabilities 확정 후)
+        if (pStatus.playerFeatures.includes('multi_window')) {
+          playerSend({
+            command: 'set_preload_config',
+            lookahead: pStatus.preloadLookahead,
+            max_decks: pStatus.preloadMaxDecks,
+          })
+          for (const w of pStatus.windows || []) {
+            if (!w || w.id === 0) continue // 창 0은 자동 생성됨
+            playerSend({
+              command: 'create_window',
+              window_id: w.id,
+              monitor_index: w.monitorIndex ?? -1,
+              x: w.x ?? 0,
+              y: w.y ?? 0,
+              width: w.width ?? 0,
+              height: w.height ?? 0,
+              aspect_mode: w.aspectMode ?? 'letterbox',
+            })
+            if (w.backgroundColor)
+              playerSend({ command: 'background_color', window_id: w.id, color: w.backgroundColor })
+          }
+          playerSend({ command: 'get_windows' })
+        }
         break
+
+      // 멀티 윈도우(v3): 창 목록 피드백 (get_windows / create_window / destroy_window 응답).
+      // 플레이어가 실제 보유한 창 목록 — SPA로 통째 전달.
+      case 'windows':
+        pStatus.playerWindows = msgData?.windows || []
+        ioClient.emit('pStatus', { playerWindows: pStatus.playerWindows })
+        logger.info(`Player windows: ${pStatus.playerWindows.length}`)
+        break
+
+      // 메모리 상태(v3): 전 트랙 프리롤 압박 가시화 — 플레이어 RSS + 시스템 가용/총 + 엔진 통계.
+      // 1초 주기 → 그대로 pStatus.memory 교체 후 SPA 발신 (UI 인디케이터).
+      case 'memory_status':
+        pStatus.memory = msgData || {}
+        ioClient.emit('pStatus', { memory: pStatus.memory })
+        break
+
+      // 멀티 PC PTP 동기 상태(v3 Phase 5): enable_ptp/ptp_base_time/get_running_time 응답.
+      case 'ptp_status':
+      case 'running_time': {
+        const { onPtpStatus } = await import('../api/player/peerSync.js')
+        onPtpStatus(msgData)
+        break
+      }
 
       // 독립 오디오 트랙 상태 틱 (v2) — pStatus.audioTracks에 병합, SPA로는 스로틀 발신
       case 'audio_track_data': {
@@ -363,6 +499,32 @@ const parsePlayerStatus = async (data) => {
         }
         break
       }
+
+      // 타임라인 위치 틱 (v2 §5.2) — pStatus.timelinePos 갱신, SPA로 ~200ms 스로틀 발신
+      case 'timeline_position': {
+        pStatus.timelinePos = {
+          time_ms: msgData.time_ms ?? 0,
+          duration_ms: msgData.duration_ms ?? pStatus.timelinePos.duration_ms ?? 0,
+          is_playing: !!msgData.is_playing,
+        }
+        const nowTl = Date.now()
+        // is_playing 전이(정지/종료)는 즉시, 그 외는 스로틀
+        if (
+          !pStatus.timelinePos.is_playing ||
+          nowTl - timelinePosEmitAt >= TIMELINE_POS_EMIT_INTERVAL_MS
+        ) {
+          timelinePosEmitAt = nowTl
+          ioClient.emit('pStatus', { timelinePos: pStatus.timelinePos })
+        }
+        break
+      }
+
+      // 타임라인 큐 지연 경고 (진단)
+      case 'timeline_cue_late':
+        logger.warn(
+          `Timeline cue late: clip=${msgData?.clip_id} by ${msgData?.late_ms}ms`,
+        )
+        break
 
       // probe_media / make_thumbnail 응답 → 대기 중인 playerRequest resolve (Phase 2.5)
       case 'probe_result':

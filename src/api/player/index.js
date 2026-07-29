@@ -11,6 +11,11 @@ import {
   pauseTrackAudios,
   resumeTrackAudios,
 } from '../playlists/trackAudio.js'
+import {
+  timelinePause,
+  timelineSeek,
+  timelineStop,
+} from '../timelines/index.js'
 import { broadcastEvent } from '../../tcp/index.js'
 import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
@@ -98,6 +103,12 @@ const playFoundFile = async (text) => {
 const play = () => {
   logger.info('Received play request without ID')
 
+  // 타임라인 모드: 플레이어가 클록 소유 — pause 토글로 재개 (timeline_play는 전용 API 경유)
+  if (pStatus.timelineMode) {
+    timelinePause() // 플레이어 timeline_pause는 토글 → 일시정지 상태면 재개
+    return 'Timeline resumed'
+  }
+
   // 덱이 일시정지 상태(로드 유지)면 이어서 재생, 그 외(정지/최초)에는 파일을 다시 로드
   const isPaused = pStatus.player.event === 'paused'
 
@@ -174,6 +185,11 @@ const play = () => {
 
 const pause = () => {
   logger.info('Received pause request')
+  // 타임라인 모드: timeline_pause 토글 (플레이어가 전 덱/오디오 트랙을 일괄 일시정지/재개)
+  if (pStatus.timelineMode) {
+    timelinePause()
+    return 'Timeline paused/resumed'
+  }
   // 플레이어의 pause는 토글 — 레인도 토글 전 덱 상태를 따라 같은 방향으로 움직인다
   const wasPaused = pStatus.player.event === 'paused'
   playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
@@ -189,6 +205,12 @@ const pause = () => {
 
 const stop = () => {
   logger.info('Received stop request')
+  // 타임라인 모드: 전용 정지 (해체 + 모드 해제 + 위치 초기화)
+  if (pStatus.timelineMode) {
+    timelineStop()
+    broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
+    return 'Timeline stopped'
+  }
   // 플레이리스트 모드일 때는 모든 플레이어 정지
   if (pStatus.playlistMode) {
     logger.info('Playlist mode: stopping all players')
@@ -202,6 +224,11 @@ const stop = () => {
 }
 
 const updateTime = (time) => {
+  // 타임라인 모드: time은 이미 ms (clientNamespace가 초×1000) → timeline_seek(ms)
+  if (pStatus.timelineMode) {
+    timelineSeek(Math.round(Number(time)))
+    return `Timeline seek to: ${time}ms`
+  }
   playerSend({ command: 'set_time', time, idx: pStatus.activePlayerId || 0 })
   return `Time updated to: ${time}`
 }
@@ -288,6 +315,38 @@ const setAudioDevice = async (deviceId) => {
   playerSend({ command: 'set_audio_device', device_id: pStatus.audioDevice })
   ioClient.emit('pStatus', { audioDevice: pStatus.audioDevice })
   return `Audio device set to: ${deviceId}`
+}
+
+const getDisplays = () => {
+  playerSend({ command: 'get_displays' })
+  return 'Requesting current display list'
+}
+
+const setDisplay = async ({ monitorIndex, x, y, width, height, aspectMode }) => {
+  pStatus.display = {
+    monitorIndex: monitorIndex ?? -1,
+    x: x ?? 0,
+    y: y ?? 0,
+    width: width ?? 0,
+    height: height ?? 0,
+    aspectMode: aspectMode ?? 'letterbox',
+  }
+  await dbStatus.update(
+    { type: 'display' },
+    { $set: { value: pStatus.display } },
+    { upsert: true },
+  )
+  playerSend({
+    command: 'set_display',
+    monitor_index: pStatus.display.monitorIndex,
+    x: pStatus.display.x,
+    y: pStatus.display.y,
+    width: pStatus.display.width,
+    height: pStatus.display.height,
+    aspect_mode: pStatus.display.aspectMode,
+  })
+  ioClient.emit('pStatus', { display: pStatus.display })
+  return 'Display settings updated'
 }
 
 const setRepeat = async (mode = null) => {
@@ -409,6 +468,8 @@ export {
   setBackground,
   getAudioDevices,
   setAudioDevice,
+  getDisplays,
+  setDisplay,
   setRepeat,
   setNext,
   setPrevious,

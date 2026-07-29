@@ -11,6 +11,7 @@ import {
 } from './api/files/folders.js'
 import { startTcpServer } from './tcp/index.js'
 import { startPlayer, stopPlayer } from './player/index.js'
+import { initSync } from './api/player/peerSync.js'
 
 // 종료 시 플레이어 프로세스 정리 (Electron 생명주기 대체)
 onShutdown(() => stopPlayer())
@@ -33,6 +34,7 @@ if (!gotTheLock) {
     logger.debug('Database initialized')
     await updateStatusFromDb()
     logger.debug('Status updated from database')
+    initSync() // 멀티 PC 동기 설정 복원 (role!=standalone이면 멀티캐스트 소켓 구성)
     setupFFmpeg()
     initWebServer()
 

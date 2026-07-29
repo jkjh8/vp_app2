@@ -64,6 +64,10 @@ const getTrackWithFileInfo = async (tracks) => {
             // 페이드는 Phase C 예약 — 스키마만 확보, 아직 미전송/미적용
             fade_in_ms: track.fade_in_ms ?? 0,
             fade_out_ms: track.fade_out_ms ?? 0,
+            // 멀티 윈도우(v3): 이 트랙을 표시할 창 id (기본 0 = 주 창)
+            window: Number.isInteger(track.window) ? track.window : 0,
+            // 트랙별 시작 지연(ms) — 플레이어가 프리롤 완료 후 delay_ms 대기했다 표시
+            delay_ms: Number.isFinite(track.delay_ms) ? track.delay_ms : 0,
             // 트랙 종속 추가 오디오 스택 (임베디드 외 별도 오디오 파일들)
             audios: await hydrateTrackAudios(track.audios),
           }
@@ -354,6 +358,8 @@ const TRACK_PATCH_KEYS = [
   'embedded_streams', // 채널별 임베디드 오디오 [{index,volume,muted,channels:[{out,volume,muted}]}]
   'fade_in_ms',
   'fade_out_ms',
+  'window', // 멀티 윈도우(v3): 표시 창 id
+  'delay_ms', // 트랙별 시작 지연(ms)
   'audios',
 ]
 
@@ -453,6 +459,191 @@ const editTrack = async (id, idx, patch) => {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 멀티 윈도우(v3) 창별 동시 시퀀싱
+//
+// 플레이리스트 = 트랙 + 트랙별 window 배정. 창마다 자신에게 배정된 트랙을 순서대로
+// (창 서브시퀀스) 동시 재생. 창별 독립 커서 = pStatus.windowStates[W].seqIndex.
+// 플레이어는 window_id 주소 + 프리롤 풀(preload_playlist)로 창별 무지연 전환한다.
+// ---------------------------------------------------------------------------
+
+// 플레이어가 멀티 윈도우/프리롤 풀을 지원하는지 (구버전 폴백 게이트)
+const multiWin = () => Array.isArray(pStatus.playerFeatures) &&
+  pStatus.playerFeatures.includes('multi_window')
+
+// 트랙을 window별 서브시퀀스로 그룹핑 (재생 순서 유지). Map<W, [{gIdx, track}]>
+const groupTracksByWindow = (tracks) => {
+  const groups = new Map()
+  ;(tracks || []).forEach((track, gIdx) => {
+    const W = Number.isInteger(track.window) ? track.window : 0
+    if (!groups.has(W)) groups.set(W, [])
+    groups.get(W).push({ gIdx, track })
+  })
+  return groups
+}
+
+// 이미지 표시시간 반영한 플레이어 전송용 file (비디오는 원본 그대로)
+const fileForPlayer = (track) => {
+  const t = resolveImageTime(track)
+  return t !== undefined ? { ...track, time: t } : track
+}
+
+// 사용 창들이 플레이어에 없으면 pStatus.windows 설정으로 create_window (창 0은 항상 존재)
+const ensureWindows = (windowIds) => {
+  const existing = new Set((pStatus.playerWindows || []).map((w) => w.window_id))
+  for (const W of windowIds) {
+    if (W === 0 || existing.has(W)) continue
+    const cfg = (pStatus.windows || []).find((w) => w.id === W) || {}
+    playerSend({
+      command: 'create_window',
+      window_id: W,
+      monitor_index: cfg.monitorIndex ?? -1,
+      x: cfg.x ?? 0,
+      y: cfg.y ?? 0,
+      width: cfg.width ?? 0,
+      height: cfg.height ?? 0,
+      aspect_mode: cfg.aspectMode ?? 'letterbox',
+    })
+    if (cfg.backgroundColor)
+      playerSend({ command: 'background_color', window_id: W, color: cfg.backgroundColor })
+  }
+}
+
+// 멀티 윈도우 재생 시작: 창별 서브시퀀스를 전 트랙 프리롤 후 동시 재생.
+// startAt(ns, 멀티 PC 공유 러닝타임)이 주어지면 각 창의 현재 트랙을 그 시각에 동시 표시(락스텝).
+const startMultiWindow = (trackIdx, startAt = null) => {
+  const tracks = pStatus.playlist.tracks || []
+  const groups = groupTracksByWindow(tracks)
+  const windowIds = [...groups.keys()]
+
+  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+
+  ensureWindows(windowIds)
+
+  pStatus.windowStates = {}
+  for (const W of windowIds) {
+    const seq = groups.get(W)
+    const files = seq.map((s) => fileForPlayer(s.track))
+    let startSeq = seq.findIndex((s) => s.gIdx === Number(trackIdx))
+    if (startSeq < 0) startSeq = 0
+
+    // 전 트랙(이 창의) 프리롤 → 이후 재생/전환 무지연
+    playerSend({
+      command: 'preload_playlist',
+      window_id: W,
+      current_index: startSeq,
+      tracks: files,
+    })
+    // 멀티 PC 동기: 현재 트랙에 공유 start_at 주입 (전 창·전 PC 동시 표시)
+    const cur =
+      startAt != null ? { ...files[startSeq], start_at: startAt } : files[startSeq]
+    const nxt = files[startSeq + 1] || null
+    playerSend({
+      command: 'play_current_and_load_next',
+      window_id: W,
+      track_idx: startSeq,
+      current: cur,
+      next: nxt,
+      current_time: resolveImageTime(seq[startSeq].track),
+      next_time: nxt ? resolveImageTime(seq[startSeq + 1].track) : undefined,
+    })
+    pStatus.windowStates[W] = {
+      seqIndex: startSeq,
+      trackId: seq[startSeq].gIdx,
+      activePlayerId: 0,
+      player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
+    }
+  }
+
+  // 하위호환 단일 필드(창 0 우선) — 기존 UI가 pStatus.trackId/file를 참조
+  const w0 = groups.has(0) ? 0 : windowIds[0]
+  if (w0 != null) {
+    const st = pStatus.windowStates[w0]
+    pStatus.trackId = st.trackId
+    pStatus.file = groups.get(w0)[st.seqIndex].track
+  }
+  ioClient.emit('pStatus', {
+    playlist: pStatus.playlist,
+    windowStates: pStatus.windowStates,
+    trackId: pStatus.trackId,
+    file: pStatus.file,
+  })
+  logger.info(
+    `Multi-window play: ${windowIds.length} windows [${windowIds.join(',')}], ${tracks.length} tracks`,
+  )
+}
+
+// 창별 end_reached 처리 (멀티 윈도우) — 해당 창 커서만 전진
+const advanceWindowOnEnd = (data) => {
+  const W = data.window_id ?? 0
+  const endedSeq = data.playlist_track_index
+  const tracks = pStatus.playlist?.tracks || []
+  const groups = groupTracksByWindow(tracks)
+  const seq = groups.get(W)
+  if (!seq || seq.length === 0) return
+
+  const repeat = pStatus.repeat
+  const isLast = endedSeq >= seq.length - 1
+  const st = pStatus.windowStates[W] || { seqIndex: endedSeq, activePlayerId: 0, player: {} }
+  const files = () => seq.map((s) => fileForPlayer(s.track))
+
+  if (repeat === 'repeat_one') {
+    playerSend({ command: 'stop', window_id: W })
+    const f = files()
+    playerSend({
+      command: 'play_current_and_load_next',
+      window_id: W,
+      track_idx: endedSeq,
+      current: f[endedSeq],
+      next: f[endedSeq + 1] || null,
+      current_time: resolveImageTime(seq[endedSeq].track),
+    })
+    st.seqIndex = endedSeq
+  } else if (!isLast) {
+    playerSend({ command: 'next', window_id: W })
+    st.seqIndex = endedSeq + 1
+  } else if (repeat === 'all') {
+    const f = files()
+    playerSend({
+      command: 'play_current_and_load_next',
+      window_id: W,
+      track_idx: 0,
+      current: f[0],
+      next: f[1] || null,
+      current_time: resolveImageTime(seq[0].track),
+      next_time: f[1] ? resolveImageTime(seq[1].track) : undefined,
+    })
+    st.seqIndex = 0
+  } else {
+    // none/single → 이 창 정지
+    playerSend({ command: 'stop', window_id: W })
+    st.seqIndex = seq.length
+  }
+
+  const clampIdx = Math.min(st.seqIndex, seq.length - 1)
+  st.trackId = seq[clampIdx]?.gIdx ?? st.trackId
+  pStatus.windowStates[W] = st
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+}
+
+// slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (멀티캐스트 트리거 진입점)
+const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) => {
+  if (
+    Object.keys(pStatus.playlist).length === 0 ||
+    pStatus.playlist.playlistId !== playlistId
+  ) {
+    const playlist = await getPlaylist(playlistId)
+    if (!playlist) return null
+    pStatus.playlist = playlist
+  }
+  await setPlaylistMode(true)
+  if (!(pStatus.playlist.tracks || []).length) return null
+  startMultiWindow(trackIdx, startAt)
+  return `synced play ${playlistId} @${startAt}`
+}
+
 const playlistPlay = async (playlistId, trackIdx = 0) => {
   try {
     if (!playlistId) {
@@ -486,6 +677,21 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
     if (!tracks || tracks.length === 0) {
       logger.error('Playlist has no tracks')
       return null
+    }
+
+    // 멀티 윈도우 지원 플레이어: 창별 동시 시퀀싱 경로 (전 트랙 프리롤 + 창별 재생)
+    if (multiWin()) {
+      // 멀티 PC master: 공유 start_at 계산 후 로컬+전 slave 동시 트리거 (락스텝)
+      if (pStatus.sync?.role === 'master') {
+        const { computeStartAt, triggerSyncPlay } = await import('../player/peerSync.js')
+        const startAt = computeStartAt()
+        const baseTime = Number(pStatus.sync.ptp?.base_time)
+        startMultiWindow(trackIdx, startAt)
+        triggerSyncPlay(playlistId, trackIdx, startAt, baseTime)
+        return `Playing playlist ${playlistId} (multi-PC master) @${startAt}`
+      }
+      startMultiWindow(trackIdx)
+      return `Playing playlist ${playlistId} (multi-window) from track ${trackIdx}`
     }
 
     const currentTrack = tracks[Number(trackIdx)]
@@ -643,4 +849,12 @@ export {
   playlistPlay,
   playNextTrack,
   preloadNextTrack,
+  // 멀티 윈도우(v3)
+  multiWin,
+  groupTracksByWindow,
+  resolveImageTime,
+  advanceWindowOnEnd,
+  ensureWindows,
+  // 멀티 PC(v3 Phase 5)
+  startMultiWindowSynced,
 }

@@ -11,9 +11,20 @@ let socket = null
 let playerPort = 1300
 let reconnectTimer = null
 
-// 플레이어 엔진 선택: 'native' = C++/GStreamer vplayer.exe, 'python' = 레거시 PySide6
-// 프로토콜(루프백 TCP NDJSON + stdout 포트 핸드셰이크)이 동일해 드롭인 교체 가능
-const playerEngine = process.env.VP_PLAYER_ENGINE || 'native'
+// 디스플레이 설정(pStatus.display) → vplayer.exe CLI 인자.
+// 프로세스 시작 시점에 창 위치가 확정돼야 초기 프레임부터 올바른 모니터에 뜬다
+// (연결 후 set_display로 재배치하면 잘못된 위치에 잠깐 보였다가 이동하는 깜빡임 발생).
+const buildDisplayArgs = () => {
+  const d = pStatus.display
+  return [
+    `--monitor=${d.monitorIndex}`,
+    `--x=${d.x}`,
+    `--y=${d.y}`,
+    `--width=${d.width}`,
+    `--height=${d.height}`,
+    `--aspect=${d.aspectMode}`,
+  ]
+}
 
 const resolveNativePlayer = () => {
   if (process.env.NODE_ENV === 'development') {
@@ -24,29 +35,13 @@ const resolveNativePlayer = () => {
     const gstRoot =
       process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 ||
       'C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64' // MSI 기본 설치 경로 폴백
-    return { exe, args: [], extraPath: path.join(gstRoot, 'bin') }
+    return { exe, args: buildDisplayArgs(), extraPath: path.join(gstRoot, 'bin') }
   }
   // 배포: player/vplayer.exe + 동봉된 gst-bundle (vplayer가 스스로 GST_PLUGIN_PATH 설정)
   const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
   return {
     exe: path.join(appDir, 'player', 'vplayer.exe'),
-    args: [],
-    extraPath: null,
-  }
-}
-
-const resolvePythonPlayer = () => {
-  if (process.env.NODE_ENV === 'development') {
-    return {
-      exe: path.resolve('player_python/python-embed/python.exe'),
-      args: [path.resolve('player_python/player.py')],
-      extraPath: null,
-    }
-  }
-  const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
-  return {
-    exe: path.join(appDir, 'player', 'python-embed', 'python.exe'),
-    args: [path.join(appDir, 'player', 'player.py')],
+    args: buildDisplayArgs(),
     extraPath: null,
   }
 }
@@ -61,10 +56,8 @@ const startPlayer = () => {
     process.env.NODE_ENV === 'development'
       ? path.resolve('.')
       : path.dirname(process.resourcesPath || app.getPath('exe'))
-  const { exe, args, extraPath } =
-    playerEngine === 'native' ? resolveNativePlayer() : resolvePythonPlayer()
+  const { exe, args, extraPath } = resolveNativePlayer()
 
-  logger.info(`Player engine: ${playerEngine}`)
   logger.info(`Player exe: ${exe}`)
   logger.info(`App path: ${appPath}`)
 
@@ -74,9 +67,6 @@ const startPlayer = () => {
     env: {
       ...process.env,
       ...(extraPath ? { PATH: `${extraPath};${process.env.PATH}` } : {}),
-      PYTHONUNBUFFERED: '1',
-      PYTHONIOENCODING: 'utf-8',
-      VP_PSTATUS: JSON.stringify(pStatus),
       APP_PATH: appPath,
     },
   })
@@ -125,7 +115,7 @@ const startPlayer = () => {
     app.quit()
   })
 
-  logger.info(`Python player started with PID: ${player.pid}`)
+  logger.info(`Player started with PID: ${player.pid}`)
 }
 
 const connectToPlayer = () => {
@@ -211,14 +201,14 @@ const stopPlayer = () => {
   }
 
   if (!player) {
-    logger.warn('Python player process is not running.')
+    logger.warn('Player process is not running.')
     return
   }
 
   player.kill()
   player = null
   playerPort = null
-  logger.info('Python player process has been terminated.')
+  logger.info('Player process has been terminated.')
 }
 
 // 소켓이 연결돼 실제로 플레이어에 명령을 보낼 수 있는 상태인지 (재생 커맨드 전 사전 확인용)
