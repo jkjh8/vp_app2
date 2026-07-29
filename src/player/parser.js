@@ -181,11 +181,9 @@ async function handleMediaChanged(data) {
       st.uuid = file.uuid
       st.filename = file.filename
     }
-    // 주 창(0) → 하위호환 단일 필드 (트랙 오디오는 playScene에서 장면 단위로 동기화)
-    if (W === 0) {
-      if (file) pStatus.file = file
-      if (sceneIdx != null) pStatus.trackId = sceneIdx
-    }
+    // 하위호환 단일 필드 (주 창 개념 폐지 — 마지막 갱신 창 기준, 트랙 오디오는 playScene에서 동기화)
+    if (file) pStatus.file = file
+    if (sceneIdx != null) pStatus.trackId = sceneIdx
     ioClient.emit('pStatus', {
       windowStates: pStatus.windowStates,
       file: pStatus.file,
@@ -424,7 +422,7 @@ const parsePlayerStatus = async (data) => {
             max_decks: pStatus.preloadMaxDecks,
           })
           for (const w of pStatus.windows || []) {
-            if (!w || w.id === 0) continue // 창 0은 자동 생성됨
+            if (!w) continue // 주 창 개념 폐지 — 설정된 모든 창을 생성
             playerSend({
               command: 'create_window',
               window_id: w.id,

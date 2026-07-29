@@ -112,51 +112,31 @@ const play = () => {
   // 덱이 일시정지 상태(로드 유지)면 이어서 재생, 그 외(정지/최초)에는 파일을 다시 로드
   const isPaused = pStatus.player.event === 'paused'
 
-  // 플레이리스트 모드일 때는 현재 트랙 재생
+  // 플레이리스트/장면 모드
   if (pStatus.playlistMode) {
-    if (isPaused) {
-      logger.info('Playlist mode: resuming paused track')
-      playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
-      resumeTrackAudios() // 트랙 종속 오디오도 함께 재개
+    const wins = Object.keys(pStatus.windowStates || {})
+    if (isPaused && wins.length) {
+      // 장면 모드: 전 창 일괄 재개
+      logger.info('Scene mode: resuming all windows')
+      wins.forEach((w) => playerSend({ command: 'play', window_id: Number(w) }))
+      resumeTrackAudios()
       broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
         fileId: pStatus.file?.number || null,
         filename: pStatus.file?.filename || null,
       })
-      return 'Resumed playlist track'
+      return 'Resumed all windows'
     }
-
-    logger.info('Playlist mode: reloading current track')
-    const tracks = pStatus.playlist.tracks
-    if (!tracks || tracks.length === 0) {
-      logger.warn('No tracks in playlist')
-      return 'No tracks in playlist'
-    }
-
-    const currentTrack = tracks[pStatus.trackId] || tracks[0]
-    const nextTrack = tracks[pStatus.trackId + 1] || null
-
-    // 이미지 타이머 정보 포함
-    const currentTime = currentTrack.is_image
-      ? currentTrack.time || 5
-      : undefined
-    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
-
-    playerSend({
-      command: 'play_current_and_load_next',
-      current: currentTrack,
-      next: nextTrack,
-      track_idx: pStatus.trackId,
-      current_time: currentTime,
-      next_time: nextTime,
-    })
-
-    pStatus.file = currentTrack
-    ioClient.emit('pStatus', { trackId: pStatus.trackId, file: pStatus.file })
+    // 정지 상태에서 재생 = 현재 장면 다시 재생 (전 창 동시)
+    logger.info('Scene mode: (re)playing current scene')
+    const sceneIdx = Number.isInteger(pStatus.trackId) ? pStatus.trackId : 0
+    import('../playlists/index.js')
+      .then(({ startScenes }) => startScenes(sceneIdx))
+      .catch((e) => logger.error(`play scene failed: ${e}`))
     broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
-      fileId: currentTrack?.number || null,
-      filename: currentTrack?.filename || null,
+      fileId: pStatus.file?.number || null,
+      filename: pStatus.file?.filename || null,
     })
-    return 'Playing playlist track'
+    return 'Playing scene'
   }
 
   // 일반 모드: 일시정지면 이어서 재생
@@ -192,7 +172,13 @@ const pause = () => {
   }
   // 플레이어의 pause는 토글 — 레인도 토글 전 덱 상태를 따라 같은 방향으로 움직인다
   const wasPaused = pStatus.player.event === 'paused'
-  playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
+  // 장면 모드: 전 창 일괄 일시정지/재개 (player pause는 창별 토글)
+  const wins = Object.keys(pStatus.windowStates || {})
+  if (pStatus.playlistMode && wins.length) {
+    wins.forEach((w) => playerSend({ command: 'pause', window_id: Number(w) }))
+  } else {
+    playerSend({ command: 'pause', idx: pStatus.activePlayerId || 0 })
+  }
   if (pStatus.playlistMode) {
     if (wasPaused) resumeTrackAudios()
     else pauseTrackAudios()
@@ -211,10 +197,14 @@ const stop = () => {
     broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
     return 'Timeline stopped'
   }
-  // 플레이리스트 모드일 때는 모든 플레이어 정지
+  // 플레이리스트/장면 모드: 전 창 동시 정지 + 장면 상태/창 상태 초기화
   if (pStatus.playlistMode) {
     logger.info('Playlist mode: stopping all players')
     playerSend({ command: 'stop_all' })
+    // 장면 컨트롤러 + windowStates 초기화 (UI가 전 창 정지를 즉시 반영)
+    import('../playlists/index.js')
+      .then(({ resetScenes }) => resetScenes())
+      .catch(() => {})
   } else {
     playerSend({ command: 'stop', idx: pStatus.activePlayerId || 0 })
   }

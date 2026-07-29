@@ -20,7 +20,7 @@ const persistWindows = async () => {
 
 const nextWindowId = () => {
   const ids = new Set((pStatus.windows || []).map((w) => w.id))
-  let id = 1
+  let id = 1 // 주 창(0) 개념 폐지 — id는 1부터
   while (ids.has(id)) id++
   return id
 }
@@ -50,21 +50,20 @@ const createWindow = async (cfg = {}) => {
     win,
   ].sort((a, b) => a.id - b.id)
   await persistWindows()
-  if (id !== 0) {
-    playerSend({
-      command: 'create_window',
-      window_id: id,
-      monitor_index: win.monitorIndex,
-      x: win.x,
-      y: win.y,
-      width: win.width,
-      height: win.height,
-      aspect_mode: win.aspectMode,
-    })
-    if (win.backgroundColor)
-      playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
-    playerSend({ command: 'get_windows' })
-  }
+  // 주 창 개념 폐지 — 모든 창은 명시 생성. id는 1부터.
+  playerSend({
+    command: 'create_window',
+    window_id: id,
+    monitor_index: win.monitorIndex,
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+    aspect_mode: win.aspectMode,
+  })
+  if (win.backgroundColor)
+    playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
+  playerSend({ command: 'get_windows' })
   logger.info(`Window config created: ${id} (${win.name})`)
   return win
 }
@@ -96,10 +95,8 @@ const deleteWindow = async (id) => {
   id = Number(id)
   pStatus.windows = (pStatus.windows || []).filter((w) => w.id !== id)
   await persistWindows()
-  if (id !== 0) {
-    playerSend({ command: 'destroy_window', window_id: id })
-    playerSend({ command: 'get_windows' })
-  }
+  playerSend({ command: 'destroy_window', window_id: id })
+  playerSend({ command: 'get_windows' })
   logger.info(`Window config deleted: ${id}`)
   return true
 }

@@ -176,11 +176,9 @@ const editPlaylist = async (args) => {
           ...updatedPlaylist,
           tracks: await getTrackWithFileInfo(updatedPlaylist.tracks),
         }
-        // Python 플레이어에 업데이트된 트랙 리스트 전송
-        playerSend({
-          command: 'set_tracks',
-          tracks: pStatus.playlist.tracks,
-        })
+        // 레거시 트랙 리스트 전송 (장면 모드에선 미사용 — 큰 metadata 블롭 전송 방지)
+        if (!multiWin())
+          playerSend({ command: 'set_tracks', tracks: pStatus.playlist.tracks })
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
@@ -215,11 +213,9 @@ const setTracksToPlaylist = async (playlistId, tracks) => {
           ...updatedPlaylist,
           tracks: await getTrackWithFileInfo(updatedPlaylist.tracks),
         }
-        // Python 플레이어에 업데이트된 트랙 리스트 전송
-        playerSend({
-          command: 'set_tracks',
-          tracks: pStatus.playlist.tracks,
-        })
+        // 레거시 트랙 리스트 전송 (장면 모드에선 미사용 — 큰 metadata 블롭 전송 방지)
+        if (!multiWin())
+          playerSend({ command: 'set_tracks', tracks: pStatus.playlist.tracks })
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
@@ -333,11 +329,9 @@ const editImageTime = async (playlistId, idx, time) => {
         ...playlist,
         tracks: await getTrackWithFileInfo(playlist.tracks),
       }
-      // Python 플레이어에 업데이트된 트랙 리스트 전송
-      playerSend({
-        command: 'set_tracks',
-        tracks: pStatus.playlist.tracks,
-      })
+      // 레거시 트랙 리스트 전송 (장면 모드에선 미사용)
+      if (!multiWin())
+        playerSend({ command: 'set_tracks', tracks: pStatus.playlist.tracks })
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
       // 다음 트랙이 변경되었으면 다시 로드
       if (idx === pStatus.trackId + 1) {
@@ -472,21 +466,55 @@ const windowClipSequence = (scenes, W) => {
   return seq
 }
 
-// 이미지 표시시간 반영한 플레이어 전송용 file (비디오는 원본 그대로)
-const fileForPlayer = (clip) => {
+// 플레이어 전송용 슬림 file — 플레이어가 쓰는 필드만. 하이드레이션의 거대한 metadata/thumbnail
+// 블롭을 통째로 보내면 루프백 TCP가 back-pressure로 멈춰(정지/피드백 불가) 재생이 안 멈추는
+// 버그가 있었다. 반드시 최소 필드만 전송한다.
+const toPlayerFile = (clip) => {
   const t = resolveImageTime(clip)
-  return t !== undefined ? { ...clip, time: t } : clip
+  return {
+    path: clip.path,
+    uuid: clip.uuid,
+    is_image: clip.is_image,
+    mimetype: clip.mimetype,
+    time: t !== undefined ? t : clip.time || 0,
+    delay_ms: Number.isFinite(clip.delay_ms) ? clip.delay_ms : 0,
+    in_ms: clip.in_ms,
+    volume: clip.volume,
+    channel_map: Array.isArray(clip.channel_map) ? clip.channel_map : null,
+    muted: clip.muted,
+    embedded_streams: Array.isArray(clip.embedded_streams) ? clip.embedded_streams : null,
+    audios: (clip.audios || []).map((a) => ({
+      id: a.id,
+      uuid: a.uuid,
+      path: a.path,
+      volume: a.volume,
+      channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
+      channels: Array.isArray(a.channels) ? a.channels : null,
+      muted: a.muted,
+      loop: a.loop,
+      delay_ms: Number.isFinite(a.delay_ms) ? a.delay_ms : 0,
+    })),
+  }
 }
+const fileForPlayer = (clip) => toPlayerFile(clip)
 
 // 장면 재생 상태 (모듈 로컬)
 let currentSceneIdx = 0
 let sceneEndedWins = new Set()
 
+// 정지 시 장면 컨트롤러 상태 + 창 상태 초기화 (전 창 동시 정지 반영)
+const resetScenes = () => {
+  currentSceneIdx = 0
+  sceneEndedWins = new Set()
+  pStatus.windowStates = {}
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+}
+
 // 사용 창들이 플레이어에 없으면 pStatus.windows 설정으로 create_window (창 0은 항상 존재)
 const ensureWindows = (windowIds) => {
   const existing = new Set((pStatus.playerWindows || []).map((w) => w.window_id))
   for (const W of windowIds) {
-    if (W === 0 || existing.has(W)) continue
+    if (existing.has(W)) continue // 주 창 개념 폐지 — 참조된 창은 모두 보장
     const cfg = (pStatus.windows || []).find((w) => w.id === W) || {}
     playerSend({
       command: 'create_window',
@@ -546,9 +574,10 @@ const playScene = (sceneIdx, startAt = null) => {
     }
   }
 
-  // 하위호환 단일 필드 + 장면 오디오 스택 동기화 (전 클립 audios 합침)
+  // 하위호환 단일 필드 + 장면 오디오 스택 동기화 (전 클립 audios 합침). 주 창 개념 폐지 →
+  // 대표 표시는 장면의 첫 클립.
   pStatus.trackId = sceneIdx
-  pStatus.file = clipsHere.find((c) => clipWin(c) === 0) || clipsHere[0] || {}
+  pStatus.file = clipsHere[0] || {}
   syncTrackAudios(sceneIdx, true)
   ioClient.emit('pStatus', {
     playlist: pStatus.playlist,
@@ -861,6 +890,7 @@ export {
   startScenes,
   playScene,
   onSceneWindowEnd,
+  resetScenes,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }
