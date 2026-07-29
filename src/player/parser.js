@@ -7,8 +7,7 @@ import { playFile, play, stop } from '../api/player/index.js'
 import {
   preloadNextTrack,
   multiWin,
-  advanceWindowOnEnd,
-  groupTracksByWindow,
+  onSceneWindowEnd,
 } from '../api/playlists/index.js'
 import {
   stopAllTrackAudios,
@@ -77,9 +76,9 @@ function handleEndReached(data) {
   const repeat = pStatus.repeat
   const playlistMode = pStatus.playlistMode
 
-  // 멀티 윈도우(v3): 창별 독립 진행 — 해당 창 커서만 전진
+  // 장면 모드(v3): 현재 장면의 모든 활성 창이 끝나면 전 창 함께 다음 장면으로 (가장 긴 클립 기준)
   if (playlistMode && multiWin()) {
-    advanceWindowOnEnd(data)
+    onSceneWindowEnd(data)
     broadcastEvent(EVENTS.TRACK_ENDED, { window_id: winId })
     return
   }
@@ -163,31 +162,29 @@ async function handleMediaChanged(data) {
   // (플레이어도 억제하지만 신구 혼용/레이스 방어). §5.2 모드 상호배타.
   if (pStatus.timelineMode) return
 
-  // 멀티 윈도우(v3): 창별 상태 갱신 + 창 서브시퀀스 인덱스 → 글로벌 인덱스 매핑
+  // 장면 모드(v3): 창별 상태 확정 (재생 명령은 playScene이 이미 optimistic 세팅, 여기선 실표시 확인)
   if (pStatus.playlistMode && multiWin()) {
     const W = data.window_id ?? 0
-    logger.info(`Media changed: win=${W} seq=${data.playlist_track_index} uuid=${data.uuid}`)
-    const file = data.uuid ? await dbFiles.findOne({ uuid: data.uuid }) : null
-    const tracks = pStatus.playlist?.tracks || []
-    const groups = groupTracksByWindow(tracks)
-    const seq = groups.get(W) || []
-    const seqIdx =
+    const sceneIdx =
       typeof data.playlist_track_index === 'number' ? data.playlist_track_index : null
-    const globalIdx = seqIdx != null && seq[seqIdx] ? seq[seqIdx].gIdx : null
+    logger.info(`Media changed: win=${W} scene=${sceneIdx} uuid=${data.uuid}`)
+    const file = data.uuid ? await dbFiles.findOne({ uuid: data.uuid }) : null
 
     if (!pStatus.windowStates[W]) pStatus.windowStates[W] = {}
     const st = pStatus.windowStates[W]
-    if (seqIdx != null) st.seqIndex = seqIdx
-    if (globalIdx != null) st.trackId = globalIdx
+    if (sceneIdx != null) {
+      st.sceneIndex = sceneIdx
+      st.trackId = sceneIdx
+    }
     if (typeof data.idx === 'number') st.activePlayerId = data.idx
-
-    // 주 창(0 또는 유일 창) → 하위호환 단일 필드 + 트랙 종속 오디오 동기화
-    // (트랙 오디오는 전역 amix 단일 스택이라 주 창 기준으로만 동기화 — 창 간 경합 회피)
-    const primaryW = groups.has(0) ? 0 : [...groups.keys()][0]
-    if (W === primaryW) {
+    if (file) {
+      st.uuid = file.uuid
+      st.filename = file.filename
+    }
+    // 주 창(0) → 하위호환 단일 필드 (트랙 오디오는 playScene에서 장면 단위로 동기화)
+    if (W === 0) {
       if (file) pStatus.file = file
-      if (globalIdx != null) pStatus.trackId = globalIdx
-      if (globalIdx != null) syncTrackAudios(globalIdx)
+      if (sceneIdx != null) pStatus.trackId = sceneIdx
     }
     ioClient.emit('pStatus', {
       windowStates: pStatus.windowStates,

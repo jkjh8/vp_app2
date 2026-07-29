@@ -36,54 +36,58 @@ const hydrateTrackAudios = async (audios) => {
   return results.filter(Boolean)
 }
 
+// 클립 1개(창별 동영상) 하이드레이션 — 파일 문서 + 영속 오버라이드 병합.
+const hydrateClip = async (clip) => {
+  if (!clip?.uuid) return null
+  const file = await dbFiles.findOne({ uuid: clip.uuid })
+  if (!file) {
+    logger.warn(`File not found for clip uuid: ${clip.uuid}`)
+    return null
+  }
+  return {
+    ...file,
+    time: clip.time || 0,
+    volume: clip.volume ?? 100, // 레거시 마스터
+    channel_map: Array.isArray(clip.channel_map) ? clip.channel_map : null,
+    muted: clip.muted ?? false,
+    embedded_streams: Array.isArray(clip.embedded_streams) ? clip.embedded_streams : null,
+    fade_in_ms: clip.fade_in_ms ?? 0,
+    fade_out_ms: clip.fade_out_ms ?? 0,
+    // 멀티 윈도우(v3): 이 클립이 표시될 창 id (장면 내 슬롯)
+    window: Number.isInteger(clip.window) ? clip.window : 0,
+    // 클립별 시작 지연(ms) — 프리롤 완료 후 delay_ms 대기했다 표시
+    delay_ms: Number.isFinite(clip.delay_ms) ? clip.delay_ms : 0,
+    // 클립 종속 추가 오디오 스택
+    audios: await hydrateTrackAudios(clip.audios),
+  }
+}
+
+// 레거시 플랫 트랙({uuid,window,...})을 장면(1클립) 형태로 승격
+const toSceneShape = (track) => {
+  if (Array.isArray(track?.clips)) return track
+  return { ...track, clips: track?.uuid ? [track] : [] }
+}
+
+// 플레이리스트 트랙 = 장면(scene). 각 장면은 창별 클립 묶음(clips[]).
+// 반환: [{ clips: [hydratedClip...] }] (레거시 플랫 트랙은 1클립 장면으로 승격).
 const getTrackWithFileInfo = async (tracks) => {
   if (!tracks || !Array.isArray(tracks)) {
     logger.error('Invalid tracks data')
     return []
   }
-
   const results = await Promise.all(
-    tracks.map(async (track) => {
+    tracks.map(async (raw) => {
       try {
-        const file = await dbFiles.findOne({ uuid: track.uuid })
-        if (file) {
-          return {
-            ...file,
-            time: track.time || 0,
-            // v2 라우팅/볼륨 (PROTOCOL.md §5.1) — 구 문서는 필드가 없으므로 기본값
-            // 하이드레이션으로 v1 동작 유지. channel_map은 그대로 플레이어까지 실림.
-            volume: track.volume ?? 100, // 레거시 마스터
-            channel_map: Array.isArray(track.channel_map)
-              ? track.channel_map
-              : null, // 레거시
-            muted: track.muted ?? false, // 레거시 마스터 뮤트
-            // 채널별 임베디드 오디오 (스트림>채널). 있으면 플레이어가 channel_map보다 우선.
-            // 기본값(스트림/채널 채우기)은 UI가 metadata.streams로 병합 — 여기선 영속값만 통과.
-            embedded_streams: Array.isArray(track.embedded_streams)
-              ? track.embedded_streams
-              : null,
-            // 페이드는 Phase C 예약 — 스키마만 확보, 아직 미전송/미적용
-            fade_in_ms: track.fade_in_ms ?? 0,
-            fade_out_ms: track.fade_out_ms ?? 0,
-            // 멀티 윈도우(v3): 이 트랙을 표시할 창 id (기본 0 = 주 창)
-            window: Number.isInteger(track.window) ? track.window : 0,
-            // 트랙별 시작 지연(ms) — 플레이어가 프리롤 완료 후 delay_ms 대기했다 표시
-            delay_ms: Number.isFinite(track.delay_ms) ? track.delay_ms : 0,
-            // 트랙 종속 추가 오디오 스택 (임베디드 외 별도 오디오 파일들)
-            audios: await hydrateTrackAudios(track.audios),
-          }
-        }
-        logger.warn(`File not found for track uuid: ${track.uuid}`)
-        return null
+        const scene = toSceneShape(raw)
+        const clips = (await Promise.all(scene.clips.map(hydrateClip))).filter(Boolean)
+        return { ...scene, clips }
       } catch (error) {
-        logger.error(`Error fetching file for track uuid ${track.uuid}:`, error)
+        logger.error(`Error hydrating scene:`, error)
         return null
       }
     }),
   )
-
-  // Filter out null/undefined values
-  return results.filter((item) => item !== null && item !== undefined)
+  return results.filter((item) => item !== null && item !== undefined && item.clips.length > 0)
 }
 
 // 이미지 트랙의 표시 시간(초) 결정.
@@ -349,20 +353,8 @@ const editImageTime = async (playlistId, idx, time) => {
   }
 }
 
-// 트랙 영속 필드 부분 갱신 화이트리스트 (파일 문서 필드/uuid는 여기로 못 바꾼다)
-// muted = 임베디드 오디오 뮤트, audios = 트랙 종속 추가 오디오 스택
-const TRACK_PATCH_KEYS = [
-  'time',
-  'volume',
-  'channel_map',
-  'muted',
-  'embedded_streams', // 채널별 임베디드 오디오 [{index,volume,muted,channels:[{out,volume,muted}]}]
-  'fade_in_ms',
-  'fade_out_ms',
-  'window', // 멀티 윈도우(v3): 표시 창 id
-  'delay_ms', // 트랙별 시작 지연(ms)
-  'audios',
-]
+// 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 모델은 clips[]가 편집 단위.
+const TRACK_PATCH_KEYS = ['clips']
 
 // 채널별 [{out,volume,muted}] 정규화
 const normalizeChannels = (channels) =>
@@ -372,8 +364,7 @@ const normalizeChannels = (channels) =>
     muted: c?.muted === true,
   }))
 
-// 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. UI가 보낸 하이드레이션
-// 필드(filename/path/metadata)는 버리고 영속 형태만 저장한다.
+// 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. 하이드레이션 필드는 버린다.
 const normalizeAudios = (audios) =>
   (Array.isArray(audios) ? audios : [])
     .filter((a) => a && a.uuid)
@@ -382,17 +373,38 @@ const normalizeAudios = (audios) =>
       uuid: a.uuid,
       volume: Math.max(0, Math.min(100, Number(a.volume ?? 100))),
       channel_map: Array.isArray(a.channel_map) ? a.channel_map : null,
-      channels: Array.isArray(a.channels)
-        ? normalizeChannels(a.channels)
-        : null,
+      channels: Array.isArray(a.channels) ? normalizeChannels(a.channels) : null,
       muted: a.muted === true,
       loop: a.loop === true,
-      delay_ms: Number.isFinite(a.delay_ms) ? Math.max(0, a.delay_ms) : 0, // 오디오 트랙별 시작 지연
+      delay_ms: Number.isFinite(a.delay_ms) ? Math.max(0, a.delay_ms) : 0,
     }))
 
-// editImageTime의 일반화 — 시간/볼륨/채널 라우팅/뮤트/추가 오디오/페이드 예약 필드 부분 갱신.
-// 덱 channel_map/muted는 다음 로드부터 적용 (PROTOCOL.md §5.1) — 재생 중이면 트랙 리스트
-// 재전송 + 프리로드 갱신으로 다음 전환부터 반영. 추가 오디오는 현재 트랙이면 즉시 재동기화.
+// 클립 1개(창별 동영상) 영속 정규화 — 파일 문서 필드는 버리고 영속 필드만.
+const normalizeClip = (clip) => ({
+  window: Number.isInteger(clip?.window) ? clip.window : 0,
+  uuid: clip?.uuid,
+  time: clip?.time || 0,
+  delay_ms: Number.isFinite(clip?.delay_ms) ? Math.max(0, clip.delay_ms) : 0,
+  volume: Math.max(0, Math.min(100, Number(clip?.volume ?? 100))),
+  channel_map: Array.isArray(clip?.channel_map) ? clip.channel_map : null,
+  muted: clip?.muted === true,
+  embedded_streams: Array.isArray(clip?.embedded_streams)
+    ? clip.embedded_streams.map((s) => ({
+        index: Number.isInteger(s?.index) ? s.index : 0,
+        volume: Math.max(0, Math.min(100, Number(s?.volume ?? 100))),
+        muted: s?.muted === true,
+        channels: normalizeChannels(s?.channels),
+      }))
+    : null,
+  audios: normalizeAudios(clip?.audios),
+})
+
+const normalizeClips = (clips) =>
+  (Array.isArray(clips) ? clips : []).filter((c) => c && c.uuid).map(normalizeClip)
+
+// 장면(트랙) 부분 갱신 — clips[] 정규화 저장. 재생 중인 장면이면 재-하이드레이션 후 UI 갱신
+// (라이브 볼륨/라우팅은 UI가 드래그 중 setDeckAudioLive/setTrackAudioLive로 이미 반영,
+//  여기선 영속 + 추가/삭제 오디오 재동기화).
 const editTrack = async (id, idx, patch) => {
   try {
     if (!id || idx === undefined || !patch || typeof patch !== 'object') {
@@ -404,55 +416,20 @@ const editTrack = async (id, idx, patch) => {
       logger.error('Track not found for editing')
       return null
     }
-    for (const key of TRACK_PATCH_KEYS) {
-      if (key in patch) {
-        if (key === 'audios')
-          playlist.tracks[idx][key] = normalizeAudios(patch[key])
-        else if (key === 'embedded_streams') {
-          playlist.tracks[idx][key] = (
-            Array.isArray(patch[key]) ? patch[key] : []
-          ).map((s) => ({
-            index: Number.isInteger(s?.index) ? s.index : 0,
-            volume: Math.max(0, Math.min(100, Number(s?.volume ?? 100))),
-            muted: s?.muted === true,
-            channels: normalizeChannels(s?.channels),
-          }))
-        } else playlist.tracks[idx][key] = patch[key]
-      }
-    }
-    const r = await dbPlaylists.update(
-      { _id: id },
-      { $set: { tracks: playlist.tracks } },
-    )
+    // 레거시 플랫 트랙이면 장면 형태로 승격 후 편집
+    const scene = Array.isArray(playlist.tracks[idx].clips)
+      ? playlist.tracks[idx]
+      : { clips: playlist.tracks[idx].uuid ? [playlist.tracks[idx]] : [] }
+    if ('clips' in patch) scene.clips = normalizeClips(patch.clips)
+    playlist.tracks[idx] = scene
 
-    // 재생 중인 플레이리스트면 하이드레이션 갱신 + 플레이어 트랙 리스트 재전송
+    const r = await dbPlaylists.update({ _id: id }, { $set: { tracks: playlist.tracks } })
+
     if (pStatus.playlistMode && pStatus.playlist?._id === id) {
-      pStatus.playlist = {
-        ...playlist,
-        tracks: await getTrackWithFileInfo(playlist.tracks),
-      }
-      playerSend({
-        command: 'set_tracks',
-        tracks: pStatus.playlist.tracks,
-      })
+      pStatus.playlist = { ...playlist, tracks: await getTrackWithFileInfo(playlist.tracks) }
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
-      if (idx === pStatus.trackId) {
-        // 현재 재생 중인 트랙 — 임베디드 오디오는 덱 라이브 변경, 추가 오디오는 diff 라이브
-        if ('embedded_streams' in patch) {
-          // 채널별(스트림>채널) 라이브
-          setDeckAudioLive({ streams: playlist.tracks[idx].embedded_streams })
-        } else {
-          const embedded = {}
-          if ('channel_map' in patch) embedded.channel_map = patch.channel_map
-          if ('volume' in patch) embedded.volume = patch.volume
-          if ('muted' in patch) embedded.muted = patch.muted
-          if (Object.keys(embedded).length) setDeckAudioLive(embedded)
-        }
-        if ('audios' in patch) syncTrackAudios(idx, true)
-      } else if (idx === pStatus.trackId + 1) {
-        logger.info('Next track settings updated, reloading preload')
-        await preloadNextTrack()
-      }
+      // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영)
+      if (idx === pStatus.trackId) syncTrackAudios(pStatus.trackId, true)
     }
     return r
   } catch (error) {
@@ -473,22 +450,37 @@ const editTrack = async (id, idx, patch) => {
 const multiWin = () => Array.isArray(pStatus.playerFeatures) &&
   pStatus.playerFeatures.includes('multi_window')
 
-// 트랙을 window별 서브시퀀스로 그룹핑 (재생 순서 유지). Map<W, [{gIdx, track}]>
-const groupTracksByWindow = (tracks) => {
-  const groups = new Map()
-  ;(tracks || []).forEach((track, gIdx) => {
-    const W = Number.isInteger(track.window) ? track.window : 0
-    if (!groups.has(W)) groups.set(W, [])
-    groups.get(W).push({ gIdx, track })
+// ── 장면(Scene) 모델 ──
+// 트랙 = 장면. 각 장면은 창별 클립 묶음(clips[]). 장면 재생 = 창들 동시 재생.
+// 장면 전환 = 현재 장면의 모든 창 클립이 끝나면(가장 긴 것 기준) 전 창 함께 다음 장면으로.
+const sceneClips = (scene) => (Array.isArray(scene?.clips) ? scene.clips : [])
+const clipWin = (clip) => (Number.isInteger(clip?.window) ? clip.window : 0)
+
+// 전체 장면에서 참조된 창 id 집합 (create_window 대상)
+const windowsInScenes = (scenes) => {
+  const s = new Set()
+  for (const sc of scenes || []) for (const c of sceneClips(sc)) s.add(clipWin(c))
+  return [...s]
+}
+// 창 W가 등장하는 장면 순서대로의 클립 목록 [{sceneIdx, clip}] (창별 프리롤/다음클립 계산)
+const windowClipSequence = (scenes, W) => {
+  const seq = []
+  ;(scenes || []).forEach((sc, sceneIdx) => {
+    const clip = sceneClips(sc).find((c) => clipWin(c) === W)
+    if (clip) seq.push({ sceneIdx, clip })
   })
-  return groups
+  return seq
 }
 
 // 이미지 표시시간 반영한 플레이어 전송용 file (비디오는 원본 그대로)
-const fileForPlayer = (track) => {
-  const t = resolveImageTime(track)
-  return t !== undefined ? { ...track, time: t } : track
+const fileForPlayer = (clip) => {
+  const t = resolveImageTime(clip)
+  return t !== undefined ? { ...clip, time: t } : clip
 }
+
+// 장면 재생 상태 (모듈 로컬)
+let currentSceneIdx = 0
+let sceneEndedWins = new Set()
 
 // 사용 창들이 플레이어에 없으면 pStatus.windows 설정으로 create_window (창 0은 항상 존재)
 const ensureWindows = (windowIds) => {
@@ -511,123 +503,137 @@ const ensureWindows = (windowIds) => {
   }
 }
 
-// 멀티 윈도우 재생 시작: 창별 서브시퀀스를 전 트랙 프리롤 후 동시 재생.
-// startAt(ns, 멀티 PC 공유 러닝타임)이 주어지면 각 창의 현재 트랙을 그 시각에 동시 표시(락스텝).
-const startMultiWindow = (trackIdx, startAt = null) => {
-  const tracks = pStatus.playlist.tracks || []
-  const groups = groupTracksByWindow(tracks)
-  const windowIds = [...groups.keys()]
+// 장면 1개 재생 — 전 창의 클립을 동시에 재생(+각 창 다음 클립 프리로드). startAt(ns)이 주어지면
+// 공유 러닝타임에 정렬(멀티 PC 락스텝). 이 장면에 클립 없는 창은 배경(정지).
+const playScene = (sceneIdx, startAt = null) => {
+  const scenes = pStatus.playlist.tracks || []
+  const scene = scenes[sceneIdx]
+  if (!scene) return
+  currentSceneIdx = sceneIdx
+  sceneEndedWins = new Set()
 
-  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
-  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
-  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
-
-  ensureWindows(windowIds)
+  const clipsHere = sceneClips(scene)
+  const activeWins = new Set(clipsHere.map(clipWin))
+  // 이 장면에 클립 없는(전체에서 쓰인) 창은 배경 처리
+  for (const W of windowsInScenes(scenes)) {
+    if (!activeWins.has(W)) playerSend({ command: 'stop', window_id: W })
+  }
 
   pStatus.windowStates = {}
-  for (const W of windowIds) {
-    const seq = groups.get(W)
-    const files = seq.map((s) => fileForPlayer(s.track))
-    let startSeq = seq.findIndex((s) => s.gIdx === Number(trackIdx))
-    if (startSeq < 0) startSeq = 0
-
-    // 전 트랙(이 창의) 프리롤 → 이후 재생/전환 무지연
-    playerSend({
-      command: 'preload_playlist',
-      window_id: W,
-      current_index: startSeq,
-      tracks: files,
-    })
-    // 멀티 PC 동기: 현재 트랙에 공유 start_at 주입 (전 창·전 PC 동시 표시)
-    const cur =
-      startAt != null ? { ...files[startSeq], start_at: startAt } : files[startSeq]
-    const nxt = files[startSeq + 1] || null
+  for (const clip of clipsHere) {
+    const W = clipWin(clip)
+    const seq = windowClipSequence(scenes, W)
+    const pos = seq.findIndex((e) => e.sceneIdx === sceneIdx)
+    let nextEntry = seq[pos + 1] || null
+    if (!nextEntry && pStatus.repeat === 'all') nextEntry = seq[0] || null
+    const cur = startAt != null ? { ...fileForPlayer(clip), start_at: startAt } : fileForPlayer(clip)
     playerSend({
       command: 'play_current_and_load_next',
       window_id: W,
-      track_idx: startSeq,
+      track_idx: sceneIdx,
       current: cur,
-      next: nxt,
-      current_time: resolveImageTime(seq[startSeq].track),
-      next_time: nxt ? resolveImageTime(seq[startSeq + 1].track) : undefined,
+      next: nextEntry ? fileForPlayer(nextEntry.clip) : null,
+      current_time: resolveImageTime(clip),
+      next_time: nextEntry ? resolveImageTime(nextEntry.clip) : undefined,
     })
     pStatus.windowStates[W] = {
-      seqIndex: startSeq,
-      trackId: seq[startSeq].gIdx,
+      sceneIndex: sceneIdx,
+      trackId: sceneIdx,
+      uuid: clip.uuid,
+      filename: clip.filename,
       activePlayerId: 0,
       player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
     }
   }
 
-  // 하위호환 단일 필드(창 0 우선) — 기존 UI가 pStatus.trackId/file를 참조
-  const w0 = groups.has(0) ? 0 : windowIds[0]
-  if (w0 != null) {
-    const st = pStatus.windowStates[w0]
-    pStatus.trackId = st.trackId
-    pStatus.file = groups.get(w0)[st.seqIndex].track
-  }
+  // 하위호환 단일 필드 + 장면 오디오 스택 동기화 (전 클립 audios 합침)
+  pStatus.trackId = sceneIdx
+  pStatus.file = clipsHere.find((c) => clipWin(c) === 0) || clipsHere[0] || {}
+  syncTrackAudios(sceneIdx, true)
   ioClient.emit('pStatus', {
     playlist: pStatus.playlist,
     windowStates: pStatus.windowStates,
     trackId: pStatus.trackId,
     file: pStatus.file,
   })
-  logger.info(
-    `Multi-window play: ${windowIds.length} windows [${windowIds.join(',')}], ${tracks.length} tracks`,
-  )
+  logger.info(`Scene ${sceneIdx} play: ${clipsHere.length} clips [win ${[...activeWins].join(',')}]`)
 }
 
-// 창별 end_reached 처리 (멀티 윈도우) — 해당 창 커서만 전진
-const advanceWindowOnEnd = (data) => {
-  const W = data.window_id ?? 0
-  const endedSeq = data.playlist_track_index
-  const tracks = pStatus.playlist?.tracks || []
-  const groups = groupTracksByWindow(tracks)
-  const seq = groups.get(W)
-  if (!seq || seq.length === 0) return
+// 장면 재생 시작(초기): 프리롤 설정 + 창 생성 + 창별 전 클립 프리롤 후 장면 재생
+const startScenes = (sceneIdx, startAt = null) => {
+  const scenes = pStatus.playlist.tracks || []
+  const windowIds = windowsInScenes(scenes)
 
+  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+  ensureWindows(windowIds)
+
+  // 창별 전 클립 프리롤 (전 트랙 프리롤 — 무지연 장면 전환)
+  for (const W of windowIds) {
+    const seq = windowClipSequence(scenes, W)
+    const files = seq.map((e) => fileForPlayer(e.clip))
+    let curIdx = seq.findIndex((e) => e.sceneIdx === sceneIdx)
+    if (curIdx < 0) curIdx = 0
+    playerSend({ command: 'preload_playlist', window_id: W, current_index: curIdx, tracks: files })
+  }
+  playScene(sceneIdx, startAt)
+}
+
+// 장면 전환 — 현재 장면의 모든 활성 창이 끝났을 때 호출 (동기 전환)
+const advanceScene = (startAt = null) => {
+  const scenes = pStatus.playlist.tracks || []
   const repeat = pStatus.repeat
-  const isLast = endedSeq >= seq.length - 1
-  const st = pStatus.windowStates[W] || { seqIndex: endedSeq, activePlayerId: 0, player: {} }
-  const files = () => seq.map((s) => fileForPlayer(s.track))
 
   if (repeat === 'repeat_one') {
-    playerSend({ command: 'stop', window_id: W })
-    const f = files()
-    playerSend({
-      command: 'play_current_and_load_next',
-      window_id: W,
-      track_idx: endedSeq,
-      current: f[endedSeq],
-      next: f[endedSeq + 1] || null,
-      current_time: resolveImageTime(seq[endedSeq].track),
-    })
-    st.seqIndex = endedSeq
-  } else if (!isLast) {
-    playerSend({ command: 'next', window_id: W })
-    st.seqIndex = endedSeq + 1
-  } else if (repeat === 'all') {
-    const f = files()
-    playerSend({
-      command: 'play_current_and_load_next',
-      window_id: W,
-      track_idx: 0,
-      current: f[0],
-      next: f[1] || null,
-      current_time: resolveImageTime(seq[0].track),
-      next_time: f[1] ? resolveImageTime(seq[1].track) : undefined,
-    })
-    st.seqIndex = 0
-  } else {
-    // none/single → 이 창 정지
-    playerSend({ command: 'stop', window_id: W })
-    st.seqIndex = seq.length
+    triggerOrPlayScene(currentSceneIdx, startAt)
+    return
   }
+  let next = currentSceneIdx + 1
+  if (next >= scenes.length) {
+    if (repeat === 'all') {
+      next = 0
+    } else {
+      playerSend({ command: 'stop_all' })
+      stopAllTrackAudios()
+      pStatus.windowStates = {}
+      pStatus.trackId = 0
+      ioClient.emit('pStatus', { windowStates: pStatus.windowStates, trackId: 0 })
+      return
+    }
+  }
+  triggerOrPlayScene(next, startAt)
+}
 
-  const clampIdx = Math.min(st.seqIndex, seq.length - 1)
-  st.trackId = seq[clampIdx]?.gIdx ?? st.trackId
-  pStatus.windowStates[W] = st
-  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+// master면 공유 start_at 계산 후 전 PC 트리거, 아니면 로컬 재생
+const triggerOrPlayScene = (sceneIdx, startAt = null) => {
+  if (pStatus.sync?.role === 'master' && startAt == null) {
+    import('../player/peerSync.js').then(({ computeStartAt, triggerSyncPlay }) => {
+      const at = computeStartAt()
+      const baseTime = Number(pStatus.sync.ptp?.base_time)
+      playScene(sceneIdx, at)
+      triggerSyncPlay(pStatus.playlist.playlistId, sceneIdx, at, baseTime)
+    })
+  } else {
+    playScene(sceneIdx, startAt)
+  }
+}
+
+// 창별 end_reached 수신 — 현재 장면의 모든 활성 창이 끝나면 다음 장면으로 (가장 긴 클립 기준).
+// 먼저 끝난 창은 마지막 프레임을 유지(정지화면). slave는 자체 전환하지 않고 master 트리거를 따른다.
+const onSceneWindowEnd = (data) => {
+  if (pStatus.sync?.role === 'slave') return // slave는 master 멀티캐스트 트리거로만 전환
+  const scenes = pStatus.playlist?.tracks || []
+  const scene = scenes[currentSceneIdx]
+  if (!scene) return
+  const W = data.window_id ?? 0
+  const endedScene = data.playlist_track_index
+  if (typeof endedScene === 'number' && endedScene !== currentSceneIdx) return // 지연/구 이벤트 방어
+  const activeWins = new Set(sceneClips(scene).map(clipWin))
+  if (!activeWins.has(W)) return
+  sceneEndedWins.add(W)
+  if (sceneEndedWins.size < activeWins.size) return // 아직 재생 중인 창 대기 (끝난 창=마지막 프레임)
+  advanceScene()
 }
 
 // slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (멀티캐스트 트리거 진입점)
@@ -642,7 +648,7 @@ const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) 
   }
   await setPlaylistMode(true)
   if (!(pStatus.playlist.tracks || []).length) return null
-  startMultiWindow(trackIdx, startAt)
+  startScenes(trackIdx, startAt)
   return `synced play ${playlistId} @${startAt}`
 }
 
@@ -681,26 +687,28 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       return null
     }
 
-    // 멀티 윈도우 지원 플레이어: 창별 동시 시퀀싱 경로 (전 트랙 프리롤 + 창별 재생)
+    // 장면(Scene) 재생 — 트랙=장면(창별 클립 묶음). 멀티 윈도우 플레이어 필수.
     if (multiWin()) {
       // 멀티 PC master: 공유 start_at 계산 후 로컬+전 slave 동시 트리거 (락스텝)
       if (pStatus.sync?.role === 'master') {
         const { computeStartAt, triggerSyncPlay } = await import('../player/peerSync.js')
         const startAt = computeStartAt()
         const baseTime = Number(pStatus.sync.ptp?.base_time)
-        startMultiWindow(trackIdx, startAt)
-        triggerSyncPlay(playlistId, trackIdx, startAt, baseTime)
+        startScenes(Number(trackIdx), startAt)
+        triggerSyncPlay(playlistId, Number(trackIdx), startAt, baseTime)
         return `Playing playlist ${playlistId} (multi-PC master) @${startAt}`
       }
-      startMultiWindow(trackIdx)
-      return `Playing playlist ${playlistId} (multi-window) from track ${trackIdx}`
+      startScenes(Number(trackIdx))
+      return `Playing playlist ${playlistId} (scenes) from scene ${trackIdx}`
     }
 
-    const currentTrack = tracks[Number(trackIdx)]
-    const nextTrack = tracks[Number(trackIdx) + 1] || null
+    // 폴백(구버전 플레이어 — multi_window 미지원): 장면의 첫 클립만 주 창에서 재생
+    const scene0 = tracks[Number(trackIdx)]
+    const currentTrack = sceneClips(scene0)[0]
+    const nextTrack = sceneClips(tracks[Number(trackIdx) + 1])[0] || null
 
     if (!currentTrack) {
-      logger.error('Current track not found')
+      logger.error('Current scene has no clip')
       return null
     }
 
@@ -709,12 +717,6 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
     ioClient.emit('pStatus', {
       playlist: pStatus.playlist,
       file: pStatus.file,
-    })
-
-    // 전체 트랙 리스트를 플레이어에 전송
-    playerSend({
-      command: 'set_tracks',
-      tracks: tracks,
     })
 
     // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
@@ -795,9 +797,10 @@ const playNextTrack = async () => {
   }
 }
 
-// 다음 트랙만 미리 로드 (플레이리스트 업데이트 시)
+// 다음 트랙만 미리 로드 (플레이리스트 업데이트 시) — 장면 모드에선 프리롤 풀이 담당하므로 no-op
 const preloadNextTrack = async () => {
   try {
+    if (multiWin()) return null // 장면 모드: preload_playlist 풀이 처리
     const tracks = pStatus.playlist?.tracks || []
     if (tracks.length === 0) {
       logger.warn('No tracks in playlist to preload')
@@ -851,12 +854,13 @@ export {
   playlistPlay,
   playNextTrack,
   preloadNextTrack,
-  // 멀티 윈도우(v3)
+  // 멀티 윈도우/장면(v3)
   multiWin,
-  groupTracksByWindow,
   resolveImageTime,
-  advanceWindowOnEnd,
   ensureWindows,
+  startScenes,
+  playScene,
+  onSceneWindowEnd,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }
