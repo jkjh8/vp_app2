@@ -510,12 +510,17 @@ const resetScenes = () => {
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
 }
 
-// 사용 창들이 플레이어에 없으면 pStatus.windows 설정으로 create_window (창 0은 항상 존재)
+// 설정된(pStatus.windows) 창 id 집합 — 재생/생성 대상의 권위. 미설정 창 id(구 플레이리스트의
+// 잔존 클립 등)는 전체화면 검정 창으로 자동 생성되지 않도록 무시한다.
+const configuredWindowIds = () => new Set((pStatus.windows || []).map((w) => w.id))
+
+// 설정된 창 중 아직 플레이어에 없는 것만 create_window (미설정 창은 생성하지 않음)
 const ensureWindows = (windowIds) => {
   const existing = new Set((pStatus.playerWindows || []).map((w) => w.window_id))
   for (const W of windowIds) {
-    if (existing.has(W)) continue // 주 창 개념 폐지 — 참조된 창은 모두 보장
-    const cfg = (pStatus.windows || []).find((w) => w.id === W) || {}
+    if (existing.has(W)) continue
+    const cfg = (pStatus.windows || []).find((w) => w.id === W)
+    if (!cfg) continue // 미설정 창은 생성하지 않음 (전체화면 검정 창 방지)
     playerSend({
       command: 'create_window',
       window_id: W,
@@ -540,7 +545,9 @@ const playScene = (sceneIdx, startAt = null) => {
   currentSceneIdx = sceneIdx
   sceneEndedWins = new Set()
 
-  const clipsHere = sceneClips(scene)
+  // 설정된 창의 클립만 재생 — 미설정 창(구 플레이리스트 잔존 클립 등)은 무시(검정 전체화면 방지)
+  const known = configuredWindowIds()
+  const clipsHere = sceneClips(scene).filter((c) => known.has(clipWin(c)))
   const activeWins = new Set(clipsHere.map(clipWin))
   // 이 장면에 클립 없는(전체에서 쓰인) 창은 배경 처리
   for (const W of windowsInScenes(scenes)) {

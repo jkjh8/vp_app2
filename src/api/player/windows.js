@@ -25,10 +25,17 @@ const nextWindowId = () => {
   return id
 }
 
+// 기본 출력 모니터 — 비주(non-primary) 모니터가 있으면 그쪽(제어 화면과 분리), 없으면 주 모니터.
+const defaultMonitorIndex = () => {
+  const d = pStatus.displays || []
+  const sec = d.find((m) => !m.primary)
+  return sec ? sec.index : -1
+}
+
 const normalize = (cfg = {}, id) => ({
   id,
   name: cfg.name || `Window ${id}`,
-  monitorIndex: Number.isInteger(cfg.monitorIndex) ? cfg.monitorIndex : -1,
+  monitorIndex: Number.isInteger(cfg.monitorIndex) ? cfg.monitorIndex : defaultMonitorIndex(),
   x: Number.isFinite(cfg.x) ? cfg.x : 0,
   y: Number.isFinite(cfg.y) ? cfg.y : 0,
   width: Number.isFinite(cfg.width) ? cfg.width : 0,
