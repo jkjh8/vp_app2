@@ -33,6 +33,7 @@ const startAudio = (audio) => {
     channel_map: !hasChannels && Array.isArray(audio.channel_map) ? audio.channel_map : undefined,
     loop: audio.loop === true,
     muted: audio.muted === true, // 마스터
+    delay_ms: Number.isFinite(audio.delay_ms) ? audio.delay_ms : 0, // 오디오 트랙별 시작 지연
   })
   pStatus.audioTracks[audio.id] = {
     id: audio.id,

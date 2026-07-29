@@ -29,6 +29,7 @@ const hydrateTrackAudios = async (audios) => {
         channels: Array.isArray(a.channels) ? a.channels : null, // 채널별 [{out,volume,muted}]
         muted: a.muted ?? false, // 마스터
         loop: a.loop ?? false,
+        delay_ms: Number.isFinite(a.delay_ms) ? a.delay_ms : 0, // 오디오 트랙별 시작 지연
       }
     }),
   )
@@ -386,6 +387,7 @@ const normalizeAudios = (audios) =>
         : null,
       muted: a.muted === true,
       loop: a.loop === true,
+      delay_ms: Number.isFinite(a.delay_ms) ? Math.max(0, a.delay_ms) : 0, // 오디오 트랙별 시작 지연
     }))
 
 // editImageTime의 일반화 — 시간/볼륨/채널 라우팅/뮤트/추가 오디오/페이드 예약 필드 부분 갱신.
