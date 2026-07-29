@@ -20,6 +20,7 @@ import {
   updateWindow,
   deleteWindow,
   setPreloadConfig,
+  setChannelDelays,
 } from '../../../api/player/windows.js'
 import { configureSync } from '../../../api/player/peerSync.js'
 import pStatus from '../../../pStatus.js'
@@ -205,6 +206,17 @@ router.put('/preload', async (req, res) => {
   } catch (error) {
     logger.error('Error setting preload config:', error)
     res.status(500).json({ error: 'Failed to set preload config' })
+  }
+})
+
+// 출력 채널별 오디오 지연(ms)
+router.put('/channel_delays', async (req, res) => {
+  try {
+    const result = await setChannelDelays(req.body?.delays || [])
+    res.status(200).json({ delays: result })
+  } catch (error) {
+    logger.error('Error setting channel delays:', error)
+    res.status(500).json({ error: 'Failed to set channel delays' })
   }
 })
 

@@ -62,6 +62,9 @@ const updateStatusFromDb = async () => {
           pStatus.sync = { ...pStatus.sync, ...status.value, ptp: pStatus.sync.ptp }
         }
         break
+      case 'channelDelays':
+        pStatus.channelDelays = Array.isArray(status.value) ? status.value : pStatus.channelDelays
+        break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
     }

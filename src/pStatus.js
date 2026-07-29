@@ -12,6 +12,8 @@ let pStatus = {
   startOnPlaylistId: null,
   audioDevices: [],
   audioDevice: '',
+  // 출력 채널별 오디오 지연(ms) — 스피커 동기 보정 (믹서 출력에 적용, 임베디드+오디오트랙 공통)
+  channelDelays: [],
   logoFile: '',
   logoShow: true, // 사용자 선호값 (show_logo 커맨드로 설정)
   logoVisible: false, // 실제 화면 표시 여부 (logo_visibility 피드백, §2.7 자동 규칙 반영 결과)

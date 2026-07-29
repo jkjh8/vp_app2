@@ -438,6 +438,14 @@ const parsePlayerStatus = async (data) => {
           }
           playerSend({ command: 'get_windows' })
         }
+        // 출력 채널별 지연 복원
+        if (
+          pStatus.playerFeatures.includes('channel_delay') &&
+          Array.isArray(pStatus.channelDelays) &&
+          pStatus.channelDelays.length
+        ) {
+          playerSend({ command: 'set_channel_delays', delays: pStatus.channelDelays })
+        }
         break
 
       // 멀티 윈도우(v3): 창 목록 피드백 (get_windows / create_window / destroy_window 응답).

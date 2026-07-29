@@ -90,6 +90,20 @@ router.get('/download/:uuid', async (req, res) => {
   }
 })
 
+// 인라인 원본 서빙 (웹 미리보기용 <video>/<img> — download와 달리 첨부 아님, range 지원)
+router.get('/raw/:uuid', async (req, res) => {
+  const { uuid } = req.params
+  try {
+    const file = await dbFiles.findOne({ uuid })
+    if (!file) return res.status(404).json({ error: 'not found' })
+    const filePath = path.join(getMediaPath(), uuid, file.filename)
+    res.sendFile(filePath) // Express sendFile은 Accept-Ranges/range 처리 → 비디오 탐색 가능
+  } catch (error) {
+    logger.error(`Error serving raw file: ${error}`)
+    res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
 // 파일 ID 중복 검사
 router.get('/check-id/:id', async (req, res) => {
   const { id } = req.params

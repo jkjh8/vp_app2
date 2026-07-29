@@ -4,7 +4,7 @@
 ; 출력: installer\Output\VP-App-Setup-<version>.exe
 
 #define AppName "VP App"
-#define AppVersion "0.4.0"
+#define AppVersion "0.5.0"
 #define AppPublisher "TechData"
 #define AppExeName "node.exe"
 #define SrcDir "..\dist-node"

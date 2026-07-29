@@ -101,6 +101,16 @@ const deleteWindow = async (id) => {
   return true
 }
 
+// 출력 채널별 오디오 지연(ms) 설정 — 영속 + 플레이어 적용
+const setChannelDelays = async (delays) => {
+  const arr = (Array.isArray(delays) ? delays : []).map((d) => Math.max(0, Number(d) || 0))
+  pStatus.channelDelays = arr
+  await dbStatus.update({ type: 'channelDelays' }, { $set: { value: arr } }, { upsert: true })
+  playerSend({ command: 'set_channel_delays', delays: arr })
+  ioClient.emit('pStatus', { channelDelays: arr })
+  return arr
+}
+
 const setPreloadConfig = async ({ lookahead, maxDecks } = {}) => {
   if (Number.isInteger(lookahead)) pStatus.preloadLookahead = lookahead
   if (Number.isInteger(maxDecks)) pStatus.preloadMaxDecks = maxDecks
@@ -121,4 +131,11 @@ const setPreloadConfig = async ({ lookahead, maxDecks } = {}) => {
   return { lookahead: pStatus.preloadLookahead, maxDecks: pStatus.preloadMaxDecks }
 }
 
-export { listWindows, createWindow, updateWindow, deleteWindow, setPreloadConfig }
+export {
+  listWindows,
+  createWindow,
+  updateWindow,
+  deleteWindow,
+  setPreloadConfig,
+  setChannelDelays,
+}
