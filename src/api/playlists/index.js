@@ -665,7 +665,10 @@ const onSceneWindowEnd = (data) => {
   const W = data.window_id ?? 0
   const endedScene = data.playlist_track_index
   if (typeof endedScene === 'number' && endedScene !== currentSceneIdx) return // 지연/구 이벤트 방어
-  const activeWins = new Set(sceneClips(scene).map(clipWin))
+  // 실제 재생된 창(설정된 창의 클립)만 종료 판정에 포함 — 미설정 창(0/3 등)은 재생 안 됐으니
+  // end_reached가 오지 않아, 포함하면 장면이 영원히 안 넘어가 멈춘다.
+  const known = configuredWindowIds()
+  const activeWins = new Set(sceneClips(scene).map(clipWin).filter((w) => known.has(w)))
   if (!activeWins.has(W)) return
   sceneEndedWins.add(W)
   if (sceneEndedWins.size < activeWins.size) return // 아직 재생 중인 창 대기 (끝난 창=마지막 프레임)
