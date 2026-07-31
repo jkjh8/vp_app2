@@ -598,7 +598,9 @@ const playScene = (sceneIdx, startAt = null) => {
 // 장면 재생 시작(초기): 프리롤 설정 + 창 생성 + 창별 전 클립 프리롤 후 장면 재생
 const startScenes = (sceneIdx, startAt = null) => {
   const scenes = pStatus.playlist.tracks || []
-  const windowIds = windowsInScenes(scenes)
+  // 설정된 창만 대상 (구 플레이리스트의 잔존 클립이 참조하는 미설정 창은 제외 — preload 에러 방지)
+  const known = configuredWindowIds()
+  const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
 
   const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
   const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
