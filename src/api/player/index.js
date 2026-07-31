@@ -3,7 +3,7 @@ import { logger } from '../../logger/index.js'
 import pStatus from '../../pStatus.js'
 import { dbStatus, dbFiles } from '../../db/index.js'
 import { getLogoPath } from '../files/folders.js'
-import { playerSend } from '../../player/index.js'
+import { playerSend, restartPlayer } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
 import {
@@ -307,6 +307,38 @@ const setAudioDevice = async (deviceId) => {
   return `Audio device set to: ${deviceId}`
 }
 
+// 하드웨어 가속 설정 ('auto'|'on'|'off'). 기동 시에만 반영되는 엔진 설정이므로 저장 후
+// 플레이어를 재시작해 적용한다 (재생이 잠시 중단됨 — UI가 확인 후 호출).
+const setHardwareAcceleration = async (value) => {
+  if (!['auto', 'on', 'off'].includes(value)) {
+    logger.warn(`Invalid hardwareAcceleration value: ${value}`)
+    return 'invalid value'
+  }
+  logger.info(`Setting hardware acceleration to: ${value}`)
+  pStatus.hardwareAcceleration = value
+  await dbStatus.update(
+    { type: 'hardwareAcceleration' },
+    { $set: { value } },
+    { upsert: true },
+  )
+  ioClient.emit('pStatus', { hardwareAcceleration: value })
+  await restartPlayer('hardware acceleration change')
+  return `Hardware acceleration set to: ${value}`
+}
+
+// 전역 마스터 볼륨 (0~100). persist=true면 DB 저장(슬라이더 릴리즈), false면 전송만(드래그).
+const setMasterVolume = async (value, persist = true) => {
+  const v = Math.max(0, Math.min(100, Number(value)))
+  if (!Number.isFinite(v)) return 'invalid value'
+  pStatus.masterVolume = v
+  playerSend({ command: 'set_master_volume', volume: v })
+  if (persist) {
+    await dbStatus.update({ type: 'masterVolume' }, { $set: { value: v } }, { upsert: true })
+  }
+  ioClient.emit('pStatus', { masterVolume: v })
+  return `Master volume set to: ${v}`
+}
+
 const getDisplays = () => {
   playerSend({ command: 'get_displays' })
   return 'Requesting current display list'
@@ -458,6 +490,8 @@ export {
   setBackground,
   getAudioDevices,
   setAudioDevice,
+  setHardwareAcceleration,
+  setMasterVolume,
   getDisplays,
   setDisplay,
   setRepeat,

@@ -8,6 +8,8 @@ import {
   setBackground,
   getAudioDevices,
   setAudioDevice,
+  setHardwareAcceleration,
+  setMasterVolume,
   getDisplays,
   setDisplay,
   setRepeat,
@@ -100,6 +102,39 @@ router.put('/setaudiodevice', async (req, res) => {
   } catch (error) {
     logger.error('Error occurred while setting audio device:', error)
     res.status(500).json({ error: 'Failed to set audio device' })
+  }
+})
+
+// 하드웨어 가속 ('auto'|'on'|'off') — 저장 후 플레이어 재시작으로 적용
+router.put('/hwaccel', async (req, res) => {
+  try {
+    const result = await setHardwareAcceleration(req.body.value)
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error('Error occurred while setting hardware acceleration:', error)
+    res.status(500).json({ error: 'Failed to set hardware acceleration' })
+  }
+})
+
+// 전역 마스터 볼륨 — 슬라이더 릴리즈(저장)
+router.put('/master_volume', async (req, res) => {
+  try {
+    const result = await setMasterVolume(req.body.value, true)
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error('Error occurred while setting master volume:', error)
+    res.status(500).json({ error: 'Failed to set master volume' })
+  }
+})
+
+// 전역 마스터 볼륨 — 드래그(전송만, 저장 안 함)
+router.put('/master_volume/live', async (req, res) => {
+  try {
+    const result = await setMasterVolume(req.body.value, false)
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error('Error occurred while setting master volume (live):', error)
+    res.status(500).json({ error: 'Failed to set master volume' })
   }
 })
 

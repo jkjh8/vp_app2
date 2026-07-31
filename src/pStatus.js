@@ -2,7 +2,11 @@ let pStatus = {
   windowOpen: false,
   playlistMode: false,
   playlist: {},
-  preloadedPlaylistId: null, // 프리로딩(로딩 버튼)된 플레이리스트 — 수정 시 재프리로드 판단
+  preloadedPlaylistId: null, // 프리로딩(로딩 버튼/편집)된 플레이리스트 — 재프리로드/배지 판단
+  // 창별 프리롤 진척 (preload_status 피드백) — { [windowId]: {expected, prerolled, ready} }.
+  // socketio.js에서 통째 교체 전송(키 삭제 의미).
+  preloadStatus: {},
+  preloadReady: false, // 파생: 활성 창 전부 프리롤 완료 (UI "로딩됨" 배지)
   trackId: 0,
   repeat: 'none',
   tcpSimplePort: 15000,
@@ -13,6 +17,11 @@ let pStatus = {
   startOnPlaylistId: null,
   audioDevices: [],
   audioDevice: '',
+  // 하드웨어 가속: 'auto' | 'on' | 'off' (기동 시 VP_HWACCEL env로 플레이어에 전달, 변경 시 재시작).
+  hardwareAcceleration: 'auto',
+  hardwareAccelEffective: null, // 'hardware' | 'software' (플레이어 hwaccel_status 실효값)
+  // 전역 오디오 마스터 볼륨 (0~100) — 플레이어 출력 버스에 적용.
+  masterVolume: 100,
   // 출력 채널별 오디오 지연(ms) — 스피커 동기 보정 (믹서 출력에 적용, 임베디드+오디오트랙 공통)
   channelDelays: [],
   logoFile: '',

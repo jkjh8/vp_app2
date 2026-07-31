@@ -10,6 +10,9 @@ let player = null
 let socket = null
 let playerPort = 1300
 let reconnectTimer = null
+// 의도적 재시작 플래그 — true인 동안 player 'close'가 app.quit()을 하지 않게 막는다
+// (하드웨어 가속 토글 등 기동 시에만 반영되는 설정 변경 시 플레이어만 재기동).
+let restarting = false
 
 // 디스플레이 설정(pStatus.display) → vplayer.exe CLI 인자.
 // 프로세스 시작 시점에 창 위치가 확정돼야 초기 프레임부터 올바른 모니터에 뜬다
@@ -68,6 +71,8 @@ const startPlayer = () => {
       ...process.env,
       ...(extraPath ? { PATH: `${extraPath};${process.env.PATH}` } : {}),
       APP_PATH: appPath,
+      // 하드웨어 가속: 'off'만 소프트웨어 강제(=0), 'auto'/'on'은 HW(=1, 플레이어가 프로브).
+      VP_HWACCEL: pStatus.hardwareAcceleration === 'off' ? '0' : '1',
     },
   })
 
@@ -104,14 +109,19 @@ const startPlayer = () => {
 
   player.on('close', (code) => {
     logger.warn(`Player process exited with code: ${code}`)
-    logger.info('Player window closed, shutting down application...')
     player = null
     playerPort = null
     if (socket) {
       socket.destroy()
       socket = null
     }
+    if (restarting) {
+      // 의도적 재시작 — 앱을 종료하지 않고 플레이어만 다시 띄운다 (restartPlayer가 respawn).
+      logger.info('Player closed for intentional restart — not quitting app.')
+      return
+    }
     // 플레이어가 종료되면 전체 애플리케이션 종료
+    logger.info('Player window closed, shutting down application...')
     app.quit()
   })
 
@@ -277,9 +287,36 @@ const resolvePlayerResult = (data) => {
   }
 }
 
+// 플레이어만 재시작 (앱 유지). 기동 시에만 반영되는 엔진 설정(하드웨어 가속 등) 변경 시 사용.
+// stop_all + 장면 상태 정리 후 kill → 잠깐 대기(장치/GL 해제) → 재기동. 재기동된 플레이어의
+// capabilities 핸들러가 창/프리롤/마스터볼륨/채널지연을 자동 복원한다.
+const restartPlayer = async (reason = '') => {
+  logger.info(`Restarting player process (${reason})`)
+  restarting = true
+  try {
+    playerSend({ command: 'stop_all' })
+  } catch (e) {
+    logger.warn(`restartPlayer stop_all failed: ${e}`)
+  }
+  try {
+    const { resetScenes } = await import('../api/playlists/index.js')
+    resetScenes()
+  } catch (e) {
+    logger.warn(`restartPlayer resetScenes failed: ${e}`)
+  }
+  stopPlayer()
+  await new Promise((r) => setTimeout(r, 400)) // OS가 창/GL/오디오 장치를 해제할 시간
+  startPlayer()
+  // 새 프로세스의 정상 종료(사용자 창 닫기 등)는 다시 app.quit 되어야 하므로 플래그 해제.
+  setTimeout(() => {
+    restarting = false
+  }, 800)
+}
+
 export {
   startPlayer,
   stopPlayer,
+  restartPlayer,
   playerSend,
   playerRequest,
   resolvePlayerResult,

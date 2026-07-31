@@ -8,6 +8,7 @@ import {
   getPlaylists,
   editPlaylist,
   setTracksToPlaylist,
+  setPlaylist,
   playlistPlay,
   setPlaylistMode,
   editImageTime,
@@ -68,6 +69,20 @@ router.put('/tracks', async (req, res) => {
   } catch (error) {
     logger.error(`Error occurred while updating playlist tracks: ${error}`)
     res.status(500).json({ error: 'Failed to update playlist tracks' })
+  }
+})
+
+// UI에서 플레이리스트를 열/선택할 때 호출 — 호스트가 "현재 열린 플레이리스트"를 인지해야
+// 편집 시 그 플레이리스트만 프리로드한다(triggerPreloadOnEdit).
+router.put('/select', async (req, res) => {
+  try {
+    const { playlistId } = req.body
+    if (!playlistId) return res.status(400).json({ error: 'playlistId is required' })
+    const result = await setPlaylist(playlistId)
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error(`Error occurred while selecting playlist: ${error}`)
+    res.status(500).json({ error: 'Failed to select playlist' })
   }
 })
 

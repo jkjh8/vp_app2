@@ -446,7 +446,27 @@ const parsePlayerStatus = async (data) => {
         ) {
           playerSend({ command: 'set_channel_delays', delays: pStatus.channelDelays })
         }
+        // 전역 마스터 볼륨 복원
+        if (pStatus.playerFeatures.includes('master_volume')) {
+          playerSend({ command: 'set_master_volume', volume: pStatus.masterVolume })
+        }
         break
+
+      // HW 가속 실효 상태(v3): 요청(enabled) vs 실효(render/decode). d3d11 프로브 실패 시 요청은
+      // on이어도 render=software가 될 수 있어, UI가 "소프트웨어(폴백)"을 구분 표시하도록 반영.
+      case 'hwaccel_status':
+        pStatus.hardwareAccelEffective =
+          msgData?.render === 'software' && msgData?.decode === 'software' ? 'software' : 'hardware'
+        ioClient.emit('pStatus', { hardwareAccelEffective: pStatus.hardwareAccelEffective })
+        logger.info(`Hardware acceleration: ${JSON.stringify(msgData)}`)
+        break
+
+      // 프리로드 상태(v3): 창별 풀 프리롤 진척 — UI "로딩됨/로딩중" 배지용.
+      case 'preload_status': {
+        const { onPreloadStatus } = await import('../api/playlists/index.js')
+        onPreloadStatus(msgData)
+        break
+      }
 
       // 멀티 윈도우(v3): 창 목록 피드백 (get_windows / create_window / destroy_window 응답).
       // 플레이어가 실제 보유한 창 목록 — SPA로 통째 전달.

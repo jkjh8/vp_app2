@@ -186,7 +186,7 @@ const editPlaylist = async (args) => {
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
-        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
+        triggerPreloadOnEdit(pStatus.playlist?.playlistId) // 편집 → 풀 재프리로드 (디바운스)
       }
     }
 
@@ -224,7 +224,7 @@ const setTracksToPlaylist = async (playlistId, tracks) => {
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
-        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
+        triggerPreloadOnEdit(pStatus.playlist?.playlistId) // 편집 → 풀 재프리로드 (디바운스)
       }
     }
 
@@ -246,8 +246,13 @@ const setPlaylist = async (playlistId) => {
       logger.error('Playlist not found')
       return null
     }
+    // 다른 플레이리스트로 전환 → 이전 프리로드 배지/상태 제거 (혼동 방지)
+    if (pStatus.preloadedPlaylistId && pStatus.preloadedPlaylistId !== playlistId) {
+      clearPreloadState()
+    }
     pStatus.playlist = playlist || {}
-    ioClient.emit('pStatus', { playlist: pStatus.playlist })
+    pStatus.trackId = 0
+    ioClient.emit('pStatus', { playlist: pStatus.playlist, trackId: 0 })
     return playlist
   } catch (error) {
     logger.error(`Error setting playlist: ${error}`)
@@ -343,7 +348,7 @@ const editImageTime = async (playlistId, idx, time) => {
       if (idx === pStatus.trackId + 1) {
         logger.info('Next track image time updated, reloading')
         await preloadNextTrack()
-        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
+        triggerPreloadOnEdit(pStatus.playlist?.playlistId) // 편집 → 풀 재프리로드 (디바운스)
       }
     }
 
@@ -357,12 +362,13 @@ const editImageTime = async (playlistId, idx, time) => {
 // 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 = clips[](영상) + audios[](추가 오디오, 장면단위).
 const TRACK_PATCH_KEYS = ['clips', 'audios']
 
-// 채널별 [{out,volume,muted}] 정규화
+// 채널별 [{out,volume,muted,name}] 정규화. name = 채널 행의 사용자 라벨(UI 표시용, 선택).
 const normalizeChannels = (channels) =>
   (Array.isArray(channels) ? channels : []).map((c) => ({
     out: Number.isInteger(c?.out) ? c.out : -1,
     volume: Math.max(0, Math.min(100, Number(c?.volume ?? 100))),
     muted: c?.muted === true,
+    name: typeof c?.name === 'string' ? c.name : '',
   }))
 
 // 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. 하이드레이션 필드는 버린다.
@@ -432,10 +438,8 @@ const editTrack = async (id, idx, patch) => {
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
       // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영)
       if (idx === pStatus.trackId) syncTrackAudios(pStatus.trackId, true)
-      // 프리로딩된 플레이리스트를 수정 → 풀 재프리로드 (수정 반영)
-      if (multiWin() && pStatus.playlist.playlistId === pStatus.preloadedPlaylistId) {
-        preloadScenes(pStatus.trackId || 0)
-      }
+      // 편집 → 풀 재프리로드 (디바운스, 현재 열린 플레이리스트만)
+      triggerPreloadOnEdit(pStatus.playlist?.playlistId)
     }
     return r
   } catch (error) {
@@ -455,6 +459,14 @@ const editTrack = async (id, idx, patch) => {
 // 플레이어가 멀티 윈도우/프리롤 풀을 지원하는지 (구버전 폴백 게이트)
 const multiWin = () => Array.isArray(pStatus.playerFeatures) &&
   pStatus.playerFeatures.includes('multi_window')
+
+// 플레이어가 동기 배치 재생(play_synced 배리어)을 지원하는지. 지원 시 창별 명령 대신 배치 1개를
+// 보내면 플레이어가 전 창을 프리롤 완료 후 동일 start_at으로 동시 스왑(락스텝)한다.
+const playSyncedSupported = () => multiWin() && Array.isArray(pStatus.playerFeatures) &&
+  pStatus.playerFeatures.includes('play_synced')
+
+// 로컬 동기 리드타임(ms). 프리롤은 플레이어 배리어가 선결하므로 스왑/링크 여유만 필요.
+const LOCAL_SYNC_LEAD_MS = 150
 
 // ── 장면(Scene) 모델 ──
 // 트랙 = 장면. 각 장면은 창별 클립 묶음(clips[]). 장면 재생 = 창들 동시 재생.
@@ -514,11 +526,71 @@ const fileForPlayer = (clip) => toPlayerFile(clip)
 let currentSceneIdx = 0
 let sceneEndedWins = new Set()
 
+// 창별 프리롤 진척 캐시 (preload_status 피드백 누적) — windowId → {expected, prerolled}
+const preloadCache = {}
+
+// 프리롤 상태 피드백 수신 → pStatus.preloadStatus/preloadReady 갱신 (UI 배지). parser에서 호출.
+const onPreloadStatus = (data) => {
+  if (!data || data.window_id == null) return
+  const W = data.window_id
+  if (data.event === 'cleared') delete preloadCache[W]
+  else preloadCache[W] = { expected: data.expected || 0, prerolled: data.prerolled || 0 }
+
+  const preloadStatus = {}
+  for (const [w, v] of Object.entries(preloadCache)) {
+    preloadStatus[w] = {
+      expected: v.expected,
+      prerolled: v.prerolled,
+      ready: v.expected > 0 && v.prerolled >= v.expected,
+    }
+  }
+  // 활성 창(프리롤 대상이 있는 창) 전부 준비되면 로딩 완료.
+  const active = Object.values(preloadStatus).filter((v) => v.expected > 0)
+  pStatus.preloadStatus = preloadStatus
+  pStatus.preloadReady = active.length > 0 && active.every((v) => v.ready)
+  ioClient.emit('pStatus', { preloadStatus, preloadReady: pStatus.preloadReady })
+}
+
+// 프리로드 상태 전체 초기화 (정지/플레이리스트 전환 시 배지 제거)
+const clearPreloadState = () => {
+  for (const k of Object.keys(preloadCache)) delete preloadCache[k]
+  pStatus.preloadedPlaylistId = null
+  pStatus.preloadStatus = {}
+  pStatus.preloadReady = false
+  ioClient.emit('pStatus', {
+    preloadedPlaylistId: null,
+    preloadStatus: {},
+    preloadReady: false,
+  })
+}
+
+// 편집 → 프리로드 (디바운스). 현재 열린/활성 플레이리스트를 수정하면 풀을 (재)프리롤해 무지연·동기
+// 재생을 준비하고, 낙관적으로 "로딩중" 배지를 켠다. 임의의 다른 플레이리스트는 대상 아님(메모리 보호).
+const preloadDebounce = new Map() // playlistId -> timer
+const triggerPreloadOnEdit = (playlistId) => {
+  if (!multiWin() || !playlistId) return
+  if (pStatus.playlist?.playlistId !== playlistId) return // 현재 열린 플레이리스트만
+  pStatus.preloadedPlaylistId = playlistId
+  pStatus.preloadReady = false
+  ioClient.emit('pStatus', { preloadedPlaylistId: playlistId, preloadReady: false })
+  clearTimeout(preloadDebounce.get(playlistId))
+  preloadDebounce.set(
+    playlistId,
+    setTimeout(async () => {
+      preloadDebounce.delete(playlistId)
+      if (pStatus.playlist?.playlistId !== playlistId) return // 그 사이 전환됨
+      if (!pStatus.playlistMode) await setPlaylistMode(true)
+      preloadScenes(pStatus.trackId || 0)
+    }, 500),
+  )
+}
+
 // 정지 시 장면 컨트롤러 상태 + 창 상태 초기화 (전 창 동시 정지 반영)
 const resetScenes = () => {
   currentSceneIdx = 0
   sceneEndedWins = new Set()
   pStatus.windowStates = {}
+  clearPreloadState()
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
 }
 
@@ -567,18 +639,17 @@ const playScene = (sceneIdx, startAt = null) => {
   }
 
   pStatus.windowStates = {}
+  const clipSpecs = []
   for (const clip of clipsHere) {
     const W = clipWin(clip)
     const seq = windowClipSequence(scenes, W)
     const pos = seq.findIndex((e) => e.sceneIdx === sceneIdx)
     let nextEntry = seq[pos + 1] || null
     if (!nextEntry && pStatus.repeat === 'all') nextEntry = seq[0] || null
-    const cur = startAt != null ? { ...fileForPlayer(clip), start_at: startAt } : fileForPlayer(clip)
-    playerSend({
-      command: 'play_current_and_load_next',
+    clipSpecs.push({
       window_id: W,
       track_idx: sceneIdx,
-      current: cur,
+      current: fileForPlayer(clip),
       next: nextEntry ? fileForPlayer(nextEntry.clip) : null,
       current_time: resolveImageTime(clip),
       next_time: nextEntry ? resolveImageTime(nextEntry.clip) : undefined,
@@ -590,6 +661,34 @@ const playScene = (sceneIdx, startAt = null) => {
       filename: clip.filename,
       activePlayerId: 0,
       player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
+    }
+  }
+
+  // 동기 배치 전송: play_synced 지원 시 전 창을 하나의 배리어로 묶어 플레이어가 프리롤 완료 후
+  // 동일 start_at으로 동시 스왑(로컬 락스텝). startAt이 명시되면(멀티 PC master) 그 값을 쓰고,
+  // 없으면 플레이어가 로컬 러닝타임+lead로 계산. 미지원 플레이어는 창별 명령으로 폴백.
+  if (playSyncedSupported() && clipSpecs.length) {
+    const cmd = {
+      command: 'play_synced',
+      scene_idx: sceneIdx,
+      lead_ms: LOCAL_SYNC_LEAD_MS,
+      timeout_ms: 1500,
+      clips: clipSpecs,
+    }
+    if (startAt != null) cmd.start_at = startAt
+    playerSend(cmd)
+  } else {
+    for (const c of clipSpecs) {
+      const cur = startAt != null ? { ...c.current, start_at: startAt } : c.current
+      playerSend({
+        command: 'play_current_and_load_next',
+        window_id: c.window_id,
+        track_idx: c.track_idx,
+        current: cur,
+        next: c.next,
+        current_time: c.current_time,
+        next_time: c.next_time,
+      })
     }
   }
 
@@ -944,6 +1043,7 @@ export {
   onSceneWindowEnd,
   resetScenes,
   preloadPlaylistOnly,
+  onPreloadStatus,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }
