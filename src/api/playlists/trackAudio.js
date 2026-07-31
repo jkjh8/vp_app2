@@ -59,9 +59,12 @@ const startAudio = (audio) => {
 const syncTrackAudios = (trackIdx, force = false) => {
   if (!force && trackIdx === currentAudioTrackIdx) return
   const track = (pStatus.playlist?.tracks || [])[trackIdx]
-  // 장면 모델: 장면의 모든 클립(창별)의 추가 오디오를 합쳐서 동기화 (오디오는 전역 amix).
+  // 장면 모델: 추가 오디오는 장면 단위(track.audios). 레거시(클립 audios)도 폴백 합산.
   const clips = Array.isArray(track?.clips) ? track.clips : track ? [track] : []
-  const desired = clips.flatMap((c) => c?.audios || []).filter((a) => a && a.path)
+  const sceneAudios = Array.isArray(track?.audios)
+    ? track.audios
+    : clips.flatMap((c) => c?.audios || [])
+  const desired = sceneAudios.filter((a) => a && a.path)
 
   // 트랙 전환 = 전체 교체
   if (trackIdx !== currentAudioTrackIdx) {

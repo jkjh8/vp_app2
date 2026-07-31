@@ -57,8 +57,7 @@ const hydrateClip = async (clip) => {
     window: Number.isInteger(clip.window) ? clip.window : 0,
     // 클립별 시작 지연(ms) — 프리롤 완료 후 delay_ms 대기했다 표시
     delay_ms: Number.isFinite(clip.delay_ms) ? clip.delay_ms : 0,
-    // 클립 종속 추가 오디오 스택
-    audios: await hydrateTrackAudios(clip.audios),
+    // 추가 오디오는 장면 단위로 분리(아래 getTrackWithFileInfo) — 클립에는 없음
   }
 }
 
@@ -80,7 +79,12 @@ const getTrackWithFileInfo = async (tracks) => {
       try {
         const scene = toSceneShape(raw)
         const clips = (await Promise.all(scene.clips.map(hydrateClip))).filter(Boolean)
-        return { ...scene, clips }
+        // 장면 단위 추가 오디오 (레거시: 클립에 있던 audios 승격)
+        const audiosRaw = Array.isArray(scene.audios)
+          ? scene.audios
+          : scene.clips.flatMap((c) => (Array.isArray(c.audios) ? c.audios : []))
+        const audios = await hydrateTrackAudios(audiosRaw)
+        return { ...scene, clips, audios }
       } catch (error) {
         logger.error(`Error hydrating scene:`, error)
         return null
@@ -350,8 +354,8 @@ const editImageTime = async (playlistId, idx, time) => {
   }
 }
 
-// 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 모델은 clips[]가 편집 단위.
-const TRACK_PATCH_KEYS = ['clips']
+// 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 = clips[](영상) + audios[](추가 오디오, 장면단위).
+const TRACK_PATCH_KEYS = ['clips', 'audios']
 
 // 채널별 [{out,volume,muted}] 정규화
 const normalizeChannels = (channels) =>
@@ -393,7 +397,7 @@ const normalizeClip = (clip) => ({
         channels: normalizeChannels(s?.channels),
       }))
     : null,
-  audios: normalizeAudios(clip?.audios),
+  // 추가 오디오는 장면 단위(audios[])로 분리 — 클립에는 저장하지 않음
 })
 
 const normalizeClips = (clips) =>
@@ -418,6 +422,7 @@ const editTrack = async (id, idx, patch) => {
       ? playlist.tracks[idx]
       : { clips: playlist.tracks[idx].uuid ? [playlist.tracks[idx]] : [] }
     if ('clips' in patch) scene.clips = normalizeClips(patch.clips)
+    if ('audios' in patch) scene.audios = normalizeAudios(patch.audios) // 장면 단위 추가 오디오
     playlist.tracks[idx] = scene
 
     const r = await dbPlaylists.update({ _id: id }, { $set: { tracks: playlist.tracks } })
