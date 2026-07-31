@@ -639,10 +639,18 @@ const preloadPlaylistOnly = async (playlistId) => {
   return `Preloaded ${playlistId}`
 }
 
-// 장면 재생 시작(초기): 프리롤 + 장면 재생
+// 장면 재생 시작. 빠른 시작을 위해 현재 장면(+다음)만 즉시 빌드하고, 전 트랙 풀 프리롤은
+// 하지 않는다(그건 "로딩" 버튼 몫). 이미 로딩(프리로드)된 상태면 풀에서 즉시 승격돼 무지연.
+// (예전엔 재생 시 전 트랙 풀을 동시에 프리롤해 현재 클립 프리롤이 경쟁 → 시작이 수십 초 지연.)
 const startScenes = (sceneIdx, startAt = null) => {
-  preloadScenes(sceneIdx)
-  playScene(sceneIdx, startAt)
+  const scenes = pStatus.playlist.tracks || []
+  const known = configuredWindowIds()
+  const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
+  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+  ensureWindows(windowIds)
+  playScene(sceneIdx, startAt) // 현재+다음만 빌드 → 즉시 시작 (풀 있으면 승격)
 }
 
 // 장면 전환 — 현재 장면의 모든 활성 창이 끝났을 때 호출 (동기 전환)
