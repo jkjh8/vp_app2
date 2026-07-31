@@ -362,13 +362,14 @@ const editImageTime = async (playlistId, idx, time) => {
 // 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 = clips[](영상) + audios[](추가 오디오, 장면단위).
 const TRACK_PATCH_KEYS = ['clips', 'audios']
 
-// 채널별 [{out,volume,muted,name}] 정규화. name = 채널 행의 사용자 라벨(UI 표시용, 선택).
+// 채널별 [{out,volume,muted,name,delay_ms}] 정규화. name=UI 라벨(선택), delay_ms=출력 채널 지연(ms).
 const normalizeChannels = (channels) =>
   (Array.isArray(channels) ? channels : []).map((c) => ({
     out: Number.isInteger(c?.out) ? c.out : -1,
     volume: Math.max(0, Math.min(100, Number(c?.volume ?? 100))),
     muted: c?.muted === true,
     name: typeof c?.name === 'string' ? c.name : '',
+    delay_ms: Number.isFinite(c?.delay_ms) ? Math.max(0, c.delay_ms) : 0,
   }))
 
 // 추가 오디오 항목 정규화 — id 부여(없으면), 필드 클램프. 하이드레이션 필드는 버린다.
@@ -436,8 +437,11 @@ const editTrack = async (id, idx, patch) => {
     if (pStatus.playlistMode && pStatus.playlist?._id === id) {
       pStatus.playlist = { ...playlist, tracks: await getTrackWithFileInfo(playlist.tracks) }
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
-      // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영)
-      if (idx === pStatus.trackId) syncTrackAudios(pStatus.trackId, true)
+      // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영) + 채널 지연 라이브 적용
+      if (idx === pStatus.trackId) {
+        syncTrackAudios(pStatus.trackId, true)
+        applySceneChannelDelays(pStatus.playlist.tracks?.[idx])
+      }
       // 편집 → 풀 재프리로드 (디바운스, 현재 열린 플레이리스트만)
       triggerPreloadOnEdit(pStatus.playlist?.playlistId)
     }
@@ -467,6 +471,29 @@ const playSyncedSupported = () => multiWin() && Array.isArray(pStatus.playerFeat
 
 // 로컬 동기 리드타임(ms). 프리롤은 플레이어 배리어가 선결하므로 스왑/링크 여유만 필요.
 const LOCAL_SYNC_LEAD_MS = 150
+
+const channelDelaySupported = () =>
+  Array.isArray(pStatus.playerFeatures) && pStatus.playerFeatures.includes('channel_delay')
+
+// 장면의 채널별 지연(ms)을 출력 채널 지연 배열로 집계해 플레이어에 적용 (set_channel_delays 재사용).
+// 각 오디오 채널 행의 out(출력 채널) 위치에 delay_ms를 매핑, 같은 출력에 여러 소스면 최대값.
+// 전역 설정 폐지 → 지연은 재생 중인 장면의 채널 설정을 따른다.
+const applySceneChannelDelays = (scene) => {
+  if (!channelDelaySupported()) return
+  const delays = []
+  const put = (channels) => {
+    for (const ch of channels || []) {
+      const out = Number.isInteger(ch?.out) ? ch.out : -1
+      const d = Number.isFinite(ch?.delay_ms) ? Math.max(0, ch.delay_ms) : 0
+      if (out < 0) continue
+      delays[out] = Math.max(delays[out] || 0, d)
+    }
+  }
+  for (const c of scene?.clips || []) put(c.embedded_streams?.[0]?.channels)
+  for (const a of scene?.audios || []) put(a.channels)
+  for (let i = 0; i < delays.length; i++) if (!Number.isFinite(delays[i])) delays[i] = 0
+  playerSend({ command: 'set_channel_delays', delays })
+}
 
 // ── 장면(Scene) 모델 ──
 // 트랙 = 장면. 각 장면은 창별 클립 묶음(clips[]). 장면 재생 = 창들 동시 재생.
@@ -591,6 +618,7 @@ const resetScenes = () => {
   sceneEndedWins = new Set()
   pStatus.windowStates = {}
   clearPreloadState()
+  if (channelDelaySupported()) playerSend({ command: 'set_channel_delays', delays: [] }) // 지연 해제
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
 }
 
@@ -697,6 +725,7 @@ const playScene = (sceneIdx, startAt = null) => {
   pStatus.trackId = sceneIdx
   pStatus.file = clipsHere[0] || {}
   syncTrackAudios(sceneIdx, true)
+  applySceneChannelDelays(scene) // 이 장면의 채널별 출력 지연 적용
   ioClient.emit('pStatus', {
     playlist: pStatus.playlist,
     windowStates: pStatus.windowStates,

@@ -438,14 +438,7 @@ const parsePlayerStatus = async (data) => {
           }
           playerSend({ command: 'get_windows' })
         }
-        // 출력 채널별 지연 복원
-        if (
-          pStatus.playerFeatures.includes('channel_delay') &&
-          Array.isArray(pStatus.channelDelays) &&
-          pStatus.channelDelays.length
-        ) {
-          playerSend({ command: 'set_channel_delays', delays: pStatus.channelDelays })
-        }
+        // 출력 채널 지연은 전역 설정 폐지 → 재생 중인 장면의 채널 설정을 따른다(playScene에서 적용).
         // 전역 마스터 볼륨 복원
         if (pStatus.playerFeatures.includes('master_volume')) {
           playerSend({ command: 'set_master_volume', volume: pStatus.masterVolume })
