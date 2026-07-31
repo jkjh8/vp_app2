@@ -182,6 +182,7 @@ const editPlaylist = async (args) => {
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
+        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
       }
     }
 
@@ -219,6 +220,7 @@ const setTracksToPlaylist = async (playlistId, tracks) => {
         ioClient.emit('pStatus', { playlist: pStatus.playlist })
         // 다음 트랙 미리 로드
         await preloadNextTrack()
+        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
       }
     }
 
@@ -337,6 +339,7 @@ const editImageTime = async (playlistId, idx, time) => {
       if (idx === pStatus.trackId + 1) {
         logger.info('Next track image time updated, reloading')
         await preloadNextTrack()
+        if (multiWin() && pStatus.playlist?.playlistId === pStatus.preloadedPlaylistId) preloadScenes(pStatus.trackId || 0)
       }
     }
 
@@ -424,6 +427,10 @@ const editTrack = async (id, idx, patch) => {
       ioClient.emit('pStatus', { playlist: pStatus.playlist })
       // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영)
       if (idx === pStatus.trackId) syncTrackAudios(pStatus.trackId, true)
+      // 프리로딩된 플레이리스트를 수정 → 풀 재프리로드 (수정 반영)
+      if (multiWin() && pStatus.playlist.playlistId === pStatus.preloadedPlaylistId) {
+        preloadScenes(pStatus.trackId || 0)
+      }
     }
     return r
   } catch (error) {
@@ -595,10 +602,11 @@ const playScene = (sceneIdx, startAt = null) => {
   logger.info(`Scene ${sceneIdx} play: ${clipsHere.length} clips [win ${[...activeWins].join(',')}]`)
 }
 
-// 장면 재생 시작(초기): 프리롤 설정 + 창 생성 + 창별 전 클립 프리롤 후 장면 재생
-const startScenes = (sceneIdx, startAt = null) => {
+// 프리롤만 수행(재생 안 함): 프리롤 설정 + 창 생성 + 창별 전 클립 프리롤.
+// 재생 없이 전 트랙을 메모리에 올려두는 "플레이리스트 로딩". current_index 기준으로 채운다.
+const preloadScenes = (sceneIdx = 0) => {
   const scenes = pStatus.playlist.tracks || []
-  // 설정된 창만 대상 (구 플레이리스트의 잔존 클립이 참조하는 미설정 창은 제외 — preload 에러 방지)
+  // 설정된 창만 대상 (미설정 창 참조 클립 제외 — preload 에러 방지)
   const known = configuredWindowIds()
   const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
 
@@ -607,7 +615,6 @@ const startScenes = (sceneIdx, startAt = null) => {
   playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
   ensureWindows(windowIds)
 
-  // 창별 전 클립 프리롤 (전 트랙 프리롤 — 무지연 장면 전환)
   for (const W of windowIds) {
     const seq = windowClipSequence(scenes, W)
     const files = seq.map((e) => fileForPlayer(e.clip))
@@ -615,6 +622,26 @@ const startScenes = (sceneIdx, startAt = null) => {
     if (curIdx < 0) curIdx = 0
     playerSend({ command: 'preload_playlist', window_id: W, current_index: curIdx, tracks: files })
   }
+  return windowIds.length
+}
+
+// 재생 없이 플레이리스트를 로드+프리롤 (로딩 버튼). 이후 재생은 즉시 승격되어 무지연.
+const preloadPlaylistOnly = async (playlistId) => {
+  if (!isPlayerConnected()) return null
+  const playlist = await getPlaylist(playlistId)
+  if (!playlist) return null
+  pStatus.playlist = playlist
+  await setPlaylistMode(true)
+  preloadScenes(0)
+  pStatus.preloadedPlaylistId = playlistId
+  ioClient.emit('pStatus', { playlist: pStatus.playlist, preloadedPlaylistId: playlistId })
+  logger.info(`Preloaded playlist ${playlistId} (${(playlist.tracks || []).length} scenes)`)
+  return `Preloaded ${playlistId}`
+}
+
+// 장면 재생 시작(초기): 프리롤 + 장면 재생
+const startScenes = (sceneIdx, startAt = null) => {
+  preloadScenes(sceneIdx)
   playScene(sceneIdx, startAt)
 }
 
@@ -903,6 +930,7 @@ export {
   playScene,
   onSceneWindowEnd,
   resetScenes,
+  preloadPlaylistOnly,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }

@@ -3,7 +3,7 @@
 // create_window/destroy_window/set_display로 반영한다. 창 0(주 창)은 플레이어가 자동 생성하므로
 // 여기서는 설정만 저장하고 명령은 보내지 않는다.
 
-import { dbStatus } from '../../db/index.js'
+import { dbStatus, dbPlaylists } from '../../db/index.js'
 import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
 import { playerSend } from '../../player/index.js'
@@ -104,7 +104,28 @@ const deleteWindow = async (id) => {
   await persistWindows()
   playerSend({ command: 'destroy_window', window_id: id })
   playerSend({ command: 'get_windows' })
-  logger.info(`Window config deleted: ${id}`)
+  // 데이터 정리: 삭제된 창을 참조하던 클립을 전 플레이리스트에서 제거 (창 수 축소 시 오류 방지).
+  // 클립이 모두 빈 장면(트랙)은 제거.
+  try {
+    const playlists = await dbPlaylists.find({})
+    for (const pl of playlists) {
+      let changed = false
+      const tracks = (pl.tracks || [])
+        .map((t) => {
+          if (!Array.isArray(t.clips)) return t
+          const kept = t.clips.filter((c) => (Number.isInteger(c.window) ? c.window : 0) !== id)
+          if (kept.length !== t.clips.length) changed = true
+          return { ...t, clips: kept }
+        })
+        .filter((t) => !Array.isArray(t.clips) || t.clips.length > 0)
+      if (changed || tracks.length !== (pl.tracks || []).length) {
+        await dbPlaylists.update({ _id: pl._id }, { $set: { tracks } })
+      }
+    }
+  } catch (e) {
+    logger.error(`window delete cleanup failed: ${e}`)
+  }
+  logger.info(`Window config deleted: ${id} (clips referencing it removed)`)
   return true
 }
 

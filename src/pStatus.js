@@ -2,6 +2,7 @@ let pStatus = {
   windowOpen: false,
   playlistMode: false,
   playlist: {},
+  preloadedPlaylistId: null, // 프리로딩(로딩 버튼)된 플레이리스트 — 수정 시 재프리로드 판단
   trackId: 0,
   repeat: 'none',
   tcpSimplePort: 15000,

@@ -13,6 +13,7 @@ import {
   editImageTime,
   editTrack,
   preloadNextTrack,
+  preloadPlaylistOnly,
 } from '../../../api/playlists/index.js'
 import {
   setTrackAudioLive,
@@ -103,6 +104,19 @@ router.get('/play', async (req, res) => {
   } catch (error) {
     logger.error(`Error occurred while playing playlist: ${error}`)
     res.status(500).json({ error: 'Failed to play playlist' })
+  }
+})
+
+// 플레이리스트 로딩(프리로딩만, 재생 안 함) — 전 트랙을 메모리에 프리롤
+router.get('/preload', async (req, res) => {
+  try {
+    const result = await preloadPlaylistOnly(Number(req.query.playlistId))
+    if (!result)
+      return res.status(503).json({ error: 'Preload failed (player not connected?)' })
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error preloading playlist: ${error}`)
+    res.status(500).json({ error: 'Failed to preload playlist' })
   }
 })
 
