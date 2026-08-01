@@ -1,6 +1,10 @@
 let pStatus = {
   windowOpen: false,
   playlistMode: false,
+  // 전역 작업 모드 (영속). 'scene' = 장면(전 창 락스텝) / 'window' = 창별 독립 재생·정지.
+  // 실제 재생/편집 분기는 로드된 플레이리스트의 mode 필드를 따르고, 이 값은 UI 에디터/목록 필터/
+  // 신규 플레이리스트 기본 타입을 정한다.
+  playbackMode: 'scene',
   playlist: {},
   preloadedPlaylistId: null, // 프리로딩(로딩 버튼/편집)된 플레이리스트 — 재프리로드/배지 판단
   // 창별 프리롤 진척 (preload_status 피드백) — { [windowId]: {expected, prerolled, ready} }.

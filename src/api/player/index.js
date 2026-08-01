@@ -126,12 +126,15 @@ const play = () => {
       })
       return 'Resumed all windows'
     }
-    // 정지 상태에서 재생 = 현재 장면 다시 재생 (전 창 동시)
-    logger.info('Scene mode: (re)playing current scene')
+    // 정지 상태에서 재생 = 현재 재생 다시 시작. 윈도우 모드는 전 창 각자 목록 시작, 장면 모드는 현재 장면.
+    logger.info('Playlist mode: (re)playing current')
     const sceneIdx = Number.isInteger(pStatus.trackId) ? pStatus.trackId : 0
     import('../playlists/index.js')
-      .then(({ startScenes }) => startScenes(sceneIdx))
-      .catch((e) => logger.error(`play scene failed: ${e}`))
+      .then(({ startScenes, startWindowPlaylist }) => {
+        if (pStatus.playlist?.mode === 'window') startWindowPlaylist()
+        else startScenes(sceneIdx)
+      })
+      .catch((e) => logger.error(`play (re)start failed: ${e}`))
     broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
       fileId: pStatus.file?.number || null,
       filename: pStatus.file?.filename || null,

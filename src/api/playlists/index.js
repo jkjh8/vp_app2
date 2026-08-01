@@ -5,7 +5,13 @@ import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend, isPlayerConnected } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
-import { syncTrackAudios, setDeckAudioLive } from './trackAudio.js'
+import {
+  syncTrackAudios,
+  setDeckAudioLive,
+  stopAllTrackAudios,
+  startAudios,
+  stopAudios,
+} from './trackAudio.js'
 
 // 트랙의 추가 오디오 항목들을 파일 정보와 조인 (UI 표시 + 플레이어 전송용 path/metadata)
 const hydrateTrackAudios = async (audios) => {
@@ -311,6 +317,20 @@ const setPlaylistMode = async (mode) => {
     logger.error(`Error setting playlist mode: ${error}`)
     return null
   }
+}
+
+// 전역 작업 모드 토글 ('scene' | 'window') — UI 에디터/목록/신규 기본 타입 결정. 영속 + emit.
+// (실제 재생 분기는 로드된 플레이리스트의 mode 필드를 따른다.)
+const setPlaybackMode = async (mode) => {
+  const m = mode === 'window' ? 'window' : 'scene'
+  pStatus.playbackMode = m
+  try {
+    await dbStatus.update({ type: 'playbackMode' }, { $set: { value: m } }, { upsert: true })
+  } catch (e) {
+    logger.error(`Failed to persist playbackMode: ${e}`)
+  }
+  ioClient.emit('pStatus', { playbackMode: m })
+  return m
 }
 
 const editImageTime = async (playlistId, idx, time) => {
@@ -845,6 +865,227 @@ const onSceneWindowEnd = (data) => {
   advanceScene()
 }
 
+// ---------------------------------------------------------------------------
+// 윈도우 모드 (playlist.mode === 'window') — 창별 독립 재생/정지
+//
+// 장면 모드가 전 창을 락스텝으로 묶는 것과 달리, 윈도우 모드는 각 창이 자기만의 항목 시퀀스를
+// 독립적으로 재생·정지한다. 창별 end_reached에 그 창 커서만 전진하고(advanceWindowOnEnd),
+// 전역 repeat 설정을 창별로 적용한다. play_synced(락스텝)는 쓰지 않는다.
+//
+// 데이터: 윈도우 모드 플레이리스트는 tracks를 "단일 창 항목의 평면 배열"로 저장하지만, 하이드레이션
+// 후엔 각 항목이 1클립 장면({clips:[clip], audios:[...]})이 된다. windowItemSequence가 창별로
+// 순서를 유지해 시퀀스를 뽑는다(장면 모드의 다클립 장면도 안전하게 처리).
+// ---------------------------------------------------------------------------
+
+// 창 W의 항목 시퀀스 [{ seqIdx, clip, audios }] — 창별 독립 재생 목록.
+const windowItemSequence = (scenes, W) => {
+  const seq = []
+  ;(scenes || []).forEach((sc) => {
+    const clip = sceneClips(sc).find((c) => clipWin(c) === W)
+    if (clip) seq.push({ clip, audios: Array.isArray(sc.audios) ? sc.audios : [] })
+  })
+  return seq.map((e, seqIdx) => ({ ...e, seqIdx }))
+}
+
+// 현재 재생 중인 전 창 항목의 채널 지연을 집계해 적용 (오디오 버스는 전역 공유 → 창들의 합집합).
+const applyWindowChannelDelays = () => {
+  const scenes = pStatus.playlist.tracks || []
+  const clips = []
+  const audios = []
+  for (const [W, st] of Object.entries(pStatus.windowStates || {})) {
+    const seq = windowItemSequence(scenes, Number(W))
+    const item = seq[st.seqIndex]
+    if (!item) continue
+    clips.push(item.clip)
+    for (const a of item.audios || []) audios.push(a)
+  }
+  applySceneChannelDelays({ clips, audios })
+}
+
+// 창 항목 1개 재생 (+ 그 항목 추가 오디오 기동, 이전 오디오 정지). windowStates[W] 갱신.
+const playWindowItem = (W, seq, start) => {
+  const files = seq.map((e) => fileForPlayer(e.clip))
+  playerSend({ command: 'preload_playlist', window_id: W, current_index: start, tracks: files })
+  playerSend({
+    command: 'play_current_and_load_next',
+    window_id: W,
+    track_idx: start,
+    current: files[start],
+    next: files[start + 1] || null,
+    current_time: resolveImageTime(seq[start].clip),
+    next_time: files[start + 1] ? resolveImageTime(seq[start + 1].clip) : undefined,
+  })
+  const prev = pStatus.windowStates[W]
+  if (prev) stopAudios(prev.audioIds)
+  const audioIds = startAudios(seq[start].audios)
+  pStatus.windowStates[W] = {
+    seqIndex: start,
+    trackId: start,
+    uuid: seq[start].clip.uuid,
+    filename: seq[start].clip.filename,
+    activePlayerId: 0,
+    audioIds,
+    player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
+  }
+}
+
+// 윈도우 모드 재생 시작 — 설정된 전 창을 각자 첫 항목부터 동시에 (그러나 독립적으로) 시작.
+const startWindowPlaylist = () => {
+  const scenes = pStatus.playlist.tracks || []
+  const known = configuredWindowIds()
+  const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
+  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+  ensureWindows(windowIds)
+
+  pStatus.windowStates = {}
+  for (const W of windowIds) {
+    const seq = windowItemSequence(scenes, W)
+    if (!seq.length) continue
+    playWindowItem(W, seq, 0)
+  }
+  // 하위호환 단일 필드 (대표 = 첫 활성 창의 첫 항목)
+  const w0 = windowIds.find((W) => pStatus.windowStates[W])
+  if (w0 != null) {
+    pStatus.trackId = 0
+    pStatus.file = windowItemSequence(scenes, w0)[0]?.clip || {}
+  }
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', {
+    playlist: pStatus.playlist,
+    windowStates: pStatus.windowStates,
+    trackId: pStatus.trackId,
+    file: pStatus.file,
+  })
+  logger.info(`Window playlist play: ${windowIds.length} windows [${windowIds.join(',')}]`)
+}
+
+// 창별 end_reached — 해당 창 커서만 전진 (전역 repeat를 창별 적용). slave는 자체 전환 안 함.
+const advanceWindowOnEnd = (data) => {
+  if (pStatus.sync?.role === 'slave') return
+  const W = data.window_id ?? 0
+  if (!configuredWindowIds().has(W)) return
+  // 활성(재생 중) 창만 전진 — 전역/창별 정지로 windowStates[W]가 지워졌으면 뒤늦게 도착한
+  // end_reached는 무시(정지 후 repeat=all이 재생을 되살리는 레이스 방지).
+  if (!pStatus.windowStates[W]) return
+  const scenes = pStatus.playlist?.tracks || []
+  const seq = windowItemSequence(scenes, W)
+  if (!seq.length) return
+  const st = pStatus.windowStates[W]
+  const endedSeq =
+    typeof data.playlist_track_index === 'number'
+      ? data.playlist_track_index
+      : st?.seqIndex ?? 0
+  const repeat = pStatus.repeat
+  const isLast = endedSeq >= seq.length - 1
+  const files = seq.map((e) => fileForPlayer(e.clip))
+
+  if (repeat === 'repeat_one') {
+    playerSend({ command: 'stop', window_id: W })
+    playerSend({
+      command: 'play_current_and_load_next',
+      window_id: W,
+      track_idx: endedSeq,
+      current: files[endedSeq],
+      next: files[endedSeq + 1] || null,
+      current_time: resolveImageTime(seq[endedSeq].clip),
+      next_time: files[endedSeq + 1] ? resolveImageTime(seq[endedSeq + 1].clip) : undefined,
+    })
+    updateWindowAfterAdvance(W, seq, endedSeq)
+  } else if (!isLast) {
+    playerSend({ command: 'next', window_id: W })
+    updateWindowAfterAdvance(W, seq, endedSeq + 1)
+  } else if (repeat === 'all') {
+    playerSend({
+      command: 'play_current_and_load_next',
+      window_id: W,
+      track_idx: 0,
+      current: files[0],
+      next: files[1] || null,
+      current_time: resolveImageTime(seq[0].clip),
+      next_time: files[1] ? resolveImageTime(seq[1].clip) : undefined,
+    })
+    updateWindowAfterAdvance(W, seq, 0)
+  } else {
+    // none → 이 창만 정지 (마지막 프레임 유지). 다른 창은 계속.
+    playerSend({ command: 'stop', window_id: W })
+    if (st) stopAudios(st.audioIds)
+    delete pStatus.windowStates[W]
+    applyWindowChannelDelays()
+    ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+  }
+}
+
+// advance 후 windowStates[W] 갱신 + 항목 오디오 전환 (이전 정지·새 기동)
+const updateWindowAfterAdvance = (W, seq, newSeqIdx) => {
+  const idx = Math.min(Math.max(0, newSeqIdx), seq.length - 1)
+  const st = pStatus.windowStates[W] || { activePlayerId: 0, audioIds: [], player: {} }
+  stopAudios(st.audioIds)
+  st.audioIds = startAudios(seq[idx].audios)
+  st.seqIndex = idx
+  st.trackId = idx
+  st.uuid = seq[idx].clip.uuid
+  st.filename = seq[idx].clip.filename
+  pStatus.windowStates[W] = st
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+}
+
+// 단일 창 (재)재생 (창별 재생 버튼). index = 창 시퀀스 내 시작 위치.
+const playWindow = (windowId, index = 0) => {
+  const W = Number(windowId)
+  if (!configuredWindowIds().has(W)) return null
+  const scenes = pStatus.playlist.tracks || []
+  const seq = windowItemSequence(scenes, W)
+  if (!seq.length) return null
+  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+  ensureWindows([W])
+  let start = Number(index)
+  if (!Number.isInteger(start) || start < 0 || start >= seq.length) start = 0
+  playWindowItem(W, seq, start)
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+  logger.info(`Window ${W} play @${start}`)
+  return `play window ${W} @${start}`
+}
+
+// 창별 재생 REST 진입점 — 필요 시 플레이리스트를 로드/모드 세팅 후 그 창만 재생.
+const playWindowInPlaylist = async (playlistId, windowId, index = 0) => {
+  if (!isPlayerConnected()) return null
+  if (!multiWin()) return null
+  if (
+    playlistId != null &&
+    (Object.keys(pStatus.playlist).length === 0 ||
+      pStatus.playlist.playlistId !== Number(playlistId))
+  ) {
+    const playlist = await getPlaylist(Number(playlistId))
+    if (!playlist) return null
+    pStatus.playlist = playlist
+    await setPlaylistMode(true)
+    ioClient.emit('pStatus', { playlist: pStatus.playlist })
+  } else if (!pStatus.playlistMode) {
+    await setPlaylistMode(true)
+  }
+  return playWindow(windowId, index)
+}
+
+// 단일 창 정지 (창별 정지 버튼) — 그 창만 stop + windowStates 키 삭제 + 그 창 오디오 정지.
+// stop_all/resetScenes 호출 금지 (다른 창까지 죽는다).
+const stopWindow = (windowId) => {
+  const W = Number(windowId)
+  playerSend({ command: 'stop', window_id: W })
+  const st = pStatus.windowStates[W]
+  if (st) stopAudios(st.audioIds)
+  delete pStatus.windowStates[W]
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+  logger.info(`Window ${W} stop`)
+  return `stop window ${W}`
+}
+
 // slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (멀티캐스트 트리거 진입점)
 const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) => {
   if (
@@ -894,6 +1135,12 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
     if (!tracks || tracks.length === 0) {
       logger.error('Playlist has no tracks')
       return null
+    }
+
+    // 윈도우 모드 — 각 창이 자기 목록을 독립 재생 (멀티 윈도우 플레이어 필수).
+    if (multiWin() && pStatus.playlist.mode === 'window') {
+      startWindowPlaylist()
+      return `Playing window playlist ${playlistId}`
     }
 
     // 장면(Scene) 재생 — 트랙=장면(창별 클립 묶음). 멀티 윈도우 플레이어 필수.
@@ -1073,6 +1320,13 @@ export {
   resetScenes,
   preloadPlaylistOnly,
   onPreloadStatus,
+  // 윈도우 모드 (창별 독립 재생/정지)
+  setPlaybackMode,
+  startWindowPlaylist,
+  advanceWindowOnEnd,
+  playWindow,
+  playWindowInPlaylist,
+  stopWindow,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }

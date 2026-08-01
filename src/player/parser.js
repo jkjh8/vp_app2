@@ -8,6 +8,7 @@ import {
   preloadNextTrack,
   multiWin,
   onSceneWindowEnd,
+  advanceWindowOnEnd,
 } from '../api/playlists/index.js'
 import {
   stopAllTrackAudios,
@@ -76,9 +77,13 @@ function handleEndReached(data) {
   const repeat = pStatus.repeat
   const playlistMode = pStatus.playlistMode
 
-  // 장면 모드(v3): 현재 장면의 모든 활성 창이 끝나면 전 창 함께 다음 장면으로 (가장 긴 클립 기준)
+  // 멀티 윈도우(v3): 창별 end_reached 처리. 윈도우 모드는 창별 독립 전진, 장면 모드는 전 창 동기 전진.
   if (playlistMode && multiWin()) {
-    onSceneWindowEnd(data)
+    if (pStatus.playlist?.mode === 'window') {
+      advanceWindowOnEnd(data)
+    } else {
+      onSceneWindowEnd(data)
+    }
     broadcastEvent(EVENTS.TRACK_ENDED, { window_id: winId })
     return
   }
@@ -170,7 +175,9 @@ async function handleMediaChanged(data) {
     logger.info(`Media changed: win=${W} scene=${sceneIdx} uuid=${data.uuid}`)
     const file = data.uuid ? await dbFiles.findOne({ uuid: data.uuid }) : null
 
-    if (!pStatus.windowStates[W]) pStatus.windowStates[W] = {}
+    // 재생 시작(playScene/playWindowItem)이 windowStates[W]를 미리 생성한다. 항목이 없다는 건
+    // 그 창이 정지됐다는 뜻 → 뒤늦게 도착한 media_changed로 정지된 창을 되살리지 않는다.
+    if (!pStatus.windowStates[W]) return
     const st = pStatus.windowStates[W]
     if (sceneIdx != null) {
       st.sceneIndex = sceneIdx

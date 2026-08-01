@@ -15,6 +15,9 @@ import {
   editTrack,
   preloadNextTrack,
   preloadPlaylistOnly,
+  setPlaybackMode,
+  playWindowInPlaylist,
+  stopWindow,
 } from '../../../api/playlists/index.js'
 import {
   setTrackAudioLive,
@@ -132,6 +135,48 @@ router.get('/preload', async (req, res) => {
   } catch (error) {
     logger.error(`Error preloading playlist: ${error}`)
     res.status(500).json({ error: 'Failed to preload playlist' })
+  }
+})
+
+// 전역 작업 모드 토글 ('scene'|'window'). body {value}
+router.put('/playbackmode', async (req, res) => {
+  try {
+    const mode = await setPlaybackMode(req.body?.value)
+    res.status(200).json({ playbackMode: mode })
+  } catch (error) {
+    logger.error(`Error occurred while setting playback mode: ${error}`)
+    res.status(500).json({ error: 'Failed to set playback mode' })
+  }
+})
+
+// 윈도우 모드: 단일 창 재생. query {playlistId, windowId, index?}
+router.get('/window/play', async (req, res) => {
+  try {
+    const { playlistId, windowId, index } = req.query
+    const result = await playWindowInPlaylist(
+      playlistId != null ? Number(playlistId) : null,
+      Number(windowId),
+      index != null ? Number(index) : 0,
+    )
+    if (!result)
+      return res
+        .status(503)
+        .json({ error: 'Failed to play window (player not connected or unsupported)' })
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error occurred while playing window: ${error}`)
+    res.status(500).json({ error: 'Failed to play window' })
+  }
+})
+
+// 윈도우 모드: 단일 창 정지. query {windowId}
+router.get('/window/stop', (req, res) => {
+  try {
+    const result = stopWindow(Number(req.query.windowId))
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error occurred while stopping window: ${error}`)
+    res.status(500).json({ error: 'Failed to stop window' })
   }
 })
 

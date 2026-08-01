@@ -71,6 +71,11 @@ const updateStatusFromDb = async () => {
       case 'masterVolume':
         pStatus.masterVolume = Number.isFinite(status.value) ? status.value : pStatus.masterVolume
         break
+      case 'playbackMode':
+        // 전역 작업 모드 'scene' | 'window'
+        pStatus.playbackMode =
+          status.value === 'window' || status.value === 'scene' ? status.value : pStatus.playbackMode
+        break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
     }

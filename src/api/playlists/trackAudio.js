@@ -148,6 +148,35 @@ const setDeckAudioLive = ({ streams, channel_map, volume, muted } = {}) => {
   return true
 }
 
+// ── 윈도우 모드: 창 항목별 추가 오디오 ──
+// 장면 모드의 syncTrackAudios(단일 전역 커서)와 달리, 윈도우 모드는 창마다 자기 항목의 추가
+// 오디오를 동시에 독립 재생한다. 아래 두 헬퍼는 "특정 오디오 리스트"를 id 기준으로 기동/정지한다
+// (오디오 id는 영속·고유 = aud-<uuid> 라 창 간 충돌 없음). 창 컨트롤러가 항목 전환 시 이전 항목의
+// audioIds를 stopAudios, 새 항목을 startAudios 한다.
+const startAudios = (audios) => {
+  const ids = []
+  if (!laneSupported()) return ids
+  for (const a of audios || []) {
+    if (!a || !a.path || !a.id) continue
+    startAudio(a)
+    ids.push(a.id)
+  }
+  if (ids.length) emit()
+  return ids
+}
+
+const stopAudios = (ids) => {
+  let changed = false
+  for (const id of ids || []) {
+    if (pStatus.audioTracks[id]) {
+      playerSend({ command: 'audio_track_stop', track_id: id })
+      delete pStatus.audioTracks[id]
+      changed = true
+    }
+  }
+  if (changed) emit()
+}
+
 const stopAllTrackAudios = () => {
   currentAudioTrackIdx = -1
   const ids = Object.keys(pStatus.audioTracks || {})
@@ -195,4 +224,6 @@ export {
   resumeTrackAudios,
   setTrackAudioLive,
   setDeckAudioLive,
+  startAudios,
+  stopAudios,
 }
