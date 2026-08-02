@@ -16,6 +16,7 @@ import {
   preloadNextTrack,
   preloadPlaylistOnly,
   setPlaybackMode,
+  switchPlaylistMode,
   playWindowInPlaylist,
   stopWindow,
 } from '../../../api/playlists/index.js'
@@ -146,6 +147,20 @@ router.put('/playbackmode', async (req, res) => {
   } catch (error) {
     logger.error(`Error occurred while setting playback mode: ${error}`)
     res.status(500).json({ error: 'Failed to set playback mode' })
+  }
+})
+
+// 플레이리스트 1개 타입 즉시 전환 (상단 토글). body {id, mode:'scene'|'window'}
+router.put('/mode_switch', async (req, res) => {
+  try {
+    const { id, mode } = req.body
+    if (!id) return res.status(400).json({ error: 'id is required' })
+    const result = await switchPlaylistMode(id, mode)
+    if (!result) return res.status(404).json({ error: 'playlist not found' })
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error(`Error occurred while switching playlist mode: ${error}`)
+    res.status(500).json({ error: 'Failed to switch playlist mode' })
   }
 })
 

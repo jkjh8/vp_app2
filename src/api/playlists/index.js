@@ -333,6 +333,64 @@ const setPlaybackMode = async (mode) => {
   return m
 }
 
+// 장면 tracks → 윈도우 평면 항목: 각 장면의 각 클립을 단일 창 항목으로. 장면 audios는 첫 클립에만
+// 실어 중복 재생을 막는다 (장면 audios = 장면 공유 → 평면화 시 한 항목에만).
+const sceneTracksToWindowItems = (tracks) => {
+  const items = []
+  for (const t of tracks || []) {
+    const clips = Array.isArray(t.clips) ? t.clips : t.uuid ? [t] : []
+    const audios = Array.isArray(t.audios) ? t.audios : []
+    clips.forEach((c, i) => {
+      items.push({
+        window: Number.isInteger(c.window) ? c.window : 0,
+        uuid: c.uuid,
+        time: c.time || 0,
+        delay_ms: Number.isFinite(c.delay_ms) ? c.delay_ms : 0,
+        volume: c.volume ?? 100,
+        muted: c.muted === true,
+        channel_map: Array.isArray(c.channel_map) ? c.channel_map : null,
+        embedded_streams: Array.isArray(c.embedded_streams) ? c.embedded_streams : null,
+        audios: i === 0 ? audios : [],
+      })
+    })
+  }
+  return items
+}
+
+// 윈도우 평면 항목 → 장면 tracks: 각 항목을 1클립 장면으로 (audios는 장면 단위로 이동).
+const windowItemsToScenes = (tracks) =>
+  (tracks || []).map((t) => {
+    if (Array.isArray(t.clips)) return t // 이미 장면 형태
+    const { audios, ...clip } = t
+    return { clips: [clip], audios: Array.isArray(audios) ? audios : [] }
+  })
+
+// 플레이리스트 1개의 타입을 즉시 전환 — tracks를 대상 모드 형태로 변환 후 mode와 함께 저장.
+// 현재 로드/재생 중인 플레이리스트면 정지 후 새 모드로 pStatus 갱신 (모드 혼용 방지).
+const switchPlaylistMode = async (id, mode) => {
+  const m = mode === 'window' ? 'window' : 'scene'
+  const pl = await dbPlaylists.findOne({ _id: id })
+  if (!pl) return null
+  const cur = pl.mode === 'window' ? 'window' : 'scene'
+  let tracks = pl.tracks || []
+  if (cur !== m) {
+    tracks = m === 'window' ? sceneTracksToWindowItems(tracks) : windowItemsToScenes(tracks)
+  }
+  await dbPlaylists.update({ _id: id }, { $set: { mode: m, tracks } })
+
+  // 현재 로드된 플레이리스트면 재생 정지 + pStatus 갱신 (진행 중 모드 전환의 레이스 방지)
+  if (pStatus.playlist?._id === id) {
+    if (pStatus.playlistMode) {
+      playerSend({ command: 'stop_all' })
+      resetScenes()
+      stopAllTrackAudios()
+    }
+    pStatus.playlist = { ...pl, mode: m, tracks: await getTrackWithFileInfo(tracks) }
+    ioClient.emit('pStatus', { playlist: pStatus.playlist })
+  }
+  return { mode: m }
+}
+
 const editImageTime = async (playlistId, idx, time) => {
   try {
     if (!playlistId || idx === undefined || time === undefined) {
@@ -1322,6 +1380,7 @@ export {
   onPreloadStatus,
   // 윈도우 모드 (창별 독립 재생/정지)
   setPlaybackMode,
+  switchPlaylistMode,
   startWindowPlaylist,
   advanceWindowOnEnd,
   playWindow,
