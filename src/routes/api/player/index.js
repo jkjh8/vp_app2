@@ -1,6 +1,5 @@
 import express from 'express'
 import {
-  playId,
   play,
   stop,
   pause,
@@ -30,17 +29,8 @@ import { logger } from '../../../logger/index.js'
 
 const router = express.Router()
 
-// id가 없을 때는 그냥 플레이, id가 있으면 db에서 검색해서 파일위치와 함께 전송
-router.get('/play_id/:id', async (req, res) => {
-  try {
-    const result = await playId(Number(req.params.id))
-    res.status(200).json({ message: result })
-  } catch (error) {
-    logger.error('Error occurred while playing media:', error)
-    res.status(500).json({ error: 'Failed to play media' })
-  }
-})
-
+// 단일 파일 직접 재생(playid) REST는 폐지 — 플레이어 출력은 플레이리스트(장면/윈도우)로만 구동하고
+// Files는 브라우저 미리보기(/api/files/raw)만 제공한다. (TCP 외부제어 playid는 레거시로 유지.)
 router.get('/play/:id', async (req, res) => {
   try {
     const result = await play(Number(req.params.id))

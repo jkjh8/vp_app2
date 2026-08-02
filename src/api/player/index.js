@@ -19,25 +19,7 @@ import {
 import { broadcastEvent } from '../../tcp/index.js'
 import { TCP_EVENTS } from '../../utils/tcpResponse.js'
 
-const setMedia = async (id) => {
-  logger.info(`Setting media with ID: ${id}`)
-  // Try to find by id field first, then by number
-  let file = await dbFiles.findOne({ id: String(id) })
-  if (!file) {
-    // If not found by id, try by number (for backward compatibility)
-    const numId = Number(id)
-    if (!isNaN(numId)) {
-      file = await dbFiles.findOne({ number: numId })
-    }
-  }
-  if (!file) {
-    throw new Error('File not found')
-  }
-  setPlaylistMode(false)
-  playerSend({ command: 'set_media', file, idx: pStatus.activePlayerId || 0 })
-  return `Media set to: ${file.path}`
-}
-
+// playId: 단일 파일 직접 재생 — 앱 UI에서는 폐지됐고, TCP 외부제어(api/terminal 'playid')만 레거시로 사용.
 const playId = async (id) => {
   logger.info(`Received play request with ID: ${id}`)
   // Try to find by id field first, then by number
@@ -479,7 +461,6 @@ const setPrevious = async () => {
 }
 
 export {
-  setMedia,
   playId,
   playFile,
   play,

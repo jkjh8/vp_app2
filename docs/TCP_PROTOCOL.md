@@ -1,14 +1,21 @@
 # TCP 통신 프로토콜 문서
 
+> **⚠️ 레거시 외부 제어 인터페이스** — 이 TCP 프로토콜은 현재의 REST API + socket.io(`pStatus`)
+> 제어 경로와는 **별개**의 외부 제어용 레거시 인터페이스입니다. 브라우저 SPA/일반 제어는 REST/소켓
+> API(`docs/API_MANUAL.md`)를 사용하며, TCP는 외부 시스템(예: AV 컨트롤러) 연동용으로만 유지됩니다.
+
 ## 개요
 
 VP App2의 TCP 서버는 표준화된 JSON 응답 형식을 사용하여 일관성 있고 명확한 피드백을 제공합니다.
+서버는 두 개의 포트를 엽니다: **단순(comma-separated) 포트**와 **JSON 포트**. 각 포트는 해당 형식만
+허용하며(교차 사용 시 `format_error` 반환), 명령 처리 로직은 동일합니다.
 
 ## 연결 정보
 
-- **포트**: 12345 (기본값)
-- **프로토콜**: TCP
-- **데이터 형식**: JSON (한 줄당 하나의 JSON 객체)
+- **포트**: 15000 (단순/comma-separated) · 15001 (JSON) — 기본값(`pStatus.tcpSimplePort` / `tcpJsonPort`).
+  포트 충돌 시 자동으로 +1 포트로 대체 시도.
+- **프로토콜**: TCP (0.0.0.0 바인드)
+- **데이터 형식**: 한 줄당 하나의 명령. 단순 포트는 `command,value` 형식, JSON 포트는 JSON 객체.
 
 ## 응답 형식
 
@@ -72,11 +79,15 @@ VP App2의 TCP 서버는 표준화된 JSON 응답 형식을 사용하여 일관�
 
 ### 설정
 
-- `fullscreen,true/false` - 전체화면 설정
+- `fullscreen,true/false` - 전체화면 설정 (값 생략 시 토글)
+- `togglefullscreen` - 전체화면 토글
 - `setrepeat,<mode>` - 반복 모드 설정 (none/all/repeat_one)
 - `getrepeat` - 현재 반복 모드 조회
 - `setaudiodevice,<deviceId>` - 오디오 장치 설정
 - `getaudiodevices` - 사용 가능한 오디오 장치 목록
+- `getaudiodevice` - 현재 오디오 장치 조회
+- `startonplay,<true|false>[,<playlistId>]` (별칭 `setstartonplay`) - 부팅 자동재생 설정
+- `getstartonplay` - 부팅 자동재생 설정 조회
 
 ### 플레이리스트
 
@@ -91,7 +102,6 @@ VP App2의 TCP 서버는 표준화된 JSON 응답 형식을 사용하여 일관�
 ### 기타
 
 - `updatetime,<milliseconds>` - 재생 시간 업데이트
-- `imagetime,<seconds>` - 이미지 표시 시간 설정
 
 ## 명령어 형식
 
@@ -175,9 +185,9 @@ playid,5
 import socket
 import json
 
-# 연결
+# 연결 (JSON 포트)
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect(('localhost', 12345))
+sock.connect(('localhost', 15001))
 
 # 명령 전송
 command = {"command": "play"}
@@ -196,10 +206,14 @@ else:
 ### 간단한 텔넷 테스트
 
 ```bash
-telnet localhost 12345
+telnet localhost 15000   # 단순 포트: comma-separated 명령
 # 연결 후 명령 입력:
 play
 # 또는
+playid,1
+
+# JSON 명령은 JSON 포트(15001)로:
+telnet localhost 15001
 {"command": "playid", "id": 1}
 ```
 

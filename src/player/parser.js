@@ -141,13 +141,6 @@ function handleEndReached(data) {
       broadcastEvent(EVENTS.TRACK_ENDED, {})
       break
 
-    case 'single':
-      logger.info('Single track mode, stopping')
-      playerSend({ command: 'stop', idx: data.active_player_id })
-      stopAllTrackAudios() // 재생 종료 — 트랙 종속 오디오도 종료
-      broadcastEvent(EVENTS.END_REACHED, {})
-      break
-
     case 'repeat_one':
       logger.info('Repeat one mode, replaying current track')
       playerSend({ command: 'stop', idx: data.active_player_id })

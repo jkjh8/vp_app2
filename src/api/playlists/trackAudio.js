@@ -135,11 +135,13 @@ const syncTrackAudios = (trackIdx, force = false) => {
 
 // 활성 덱(임베디드 오디오)의 라우팅/볼륨/뮤트 라이브 변경. live_routing capability 필요.
 // streams(채널별 스트림>채널) 우선, 없으면 레거시 {channel_map,volume,muted}.
-const setDeckAudioLive = ({ streams, channel_map, volume, muted } = {}) => {
+// window_id: 멀티윈도우에서 대상 창의 덱 지정(§6.2). 미지정이면 기본 창.
+const setDeckAudioLive = ({ window_id, streams, channel_map, volume, muted } = {}) => {
   if (!Array.isArray(pStatus.playerFeatures) || !pStatus.playerFeatures.includes('live_routing')) {
     return false
   }
   const cmd = { command: 'set_deck_audio' }
+  if (Number.isInteger(window_id)) cmd.window_id = window_id
   if (Array.isArray(streams)) cmd.streams = streams
   if (channel_map !== undefined) cmd.channel_map = channel_map || []
   if (volume !== undefined) cmd.volume = volume
@@ -201,18 +203,26 @@ const resumeTrackAudios = () => {
   }
 }
 
-// 재생 중인 트랙 오디오의 볼륨/뮤트 라이브 변경 (슬라이더/토글용, 목록 재조회 없이)
-const setTrackAudioLive = (audioId, { volume, muted }) => {
+// 재생 중인 추가 오디오의 볼륨/뮤트/채널 라이브 변경 (슬라이더/토글/채널편집용, 목록 재조회 없이).
+// channels(채널별 [{out,volume,muted}])가 있으면 audio_track_set_channel_map으로 라이브 적용 —
+// 윈도우 모드는 editPlaylist가 syncTrackAudios를 안 타므로 여기서 직접 적용해야 라이브가 된다.
+const setTrackAudioLive = (audioId, { volume, muted, channels } = {}) => {
   const t = pStatus.audioTracks?.[audioId]
   if (!t) return false
+  if (Array.isArray(channels)) {
+    playerSend({ command: 'audio_track_set_channel_map', track_id: audioId, map: channels })
+    t.channels = channels
+  }
   if (volume !== undefined) t.volume = volume
   if (muted !== undefined) t.muted = muted
   // 뮤트 = 실효 볼륨 0 (뮤트 해제 시 저장된 볼륨 복원)
-  playerSend({
-    command: 'audio_track_set_volume',
-    track_id: audioId,
-    volume: t.muted ? 0 : t.volume,
-  })
+  if (volume !== undefined || muted !== undefined) {
+    playerSend({
+      command: 'audio_track_set_volume',
+      track_id: audioId,
+      volume: t.muted ? 0 : t.volume,
+    })
+  }
   emit()
   return true
 }

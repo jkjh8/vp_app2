@@ -10,7 +10,6 @@ import {
   setTracksToPlaylist,
   setPlaylist,
   playlistPlay,
-  setPlaylistMode,
   editImageTime,
   editTrack,
   preloadNextTrack,
@@ -195,24 +194,15 @@ router.get('/window/stop', (req, res) => {
   }
 })
 
-// 플레이리스트 모드 명시적 토글 (UI 스위치). body {value:boolean}
-router.put('/mode', async (req, res) => {
-  try {
-    const { value } = req.body
-    const mode = await setPlaylistMode(Boolean(value))
-    res.status(200).json({ playlistMode: mode })
-  } catch (error) {
-    logger.error(`Error occurred while toggling playlist mode: ${error}`)
-    res.status(500).json({ error: 'Failed to toggle playlist mode' })
-  }
-})
+// (폐지) PUT /playlist/mode — 수동 playlistMode 토글. 재생 방식은 자동 결정(파일=단일 폐지, 재생 시
+// playlistPlay가 자동 true)되므로 제거. 장면/윈도우 타입 전환은 PUT /playlist/mode_switch 사용.
 
 // 현재 재생 트랙의 임베디드 오디오 라이브 변경 (볼륨 드래그 등 — 재조회 없이 즉시).
-// 영속화는 PUT /track patch. body {channel_map?, volume?, muted?}
+// 영속화는 PUT /track patch. body {window_id?, streams?, channel_map?, volume?, muted?}
 router.put('/deck_audio/live', async (req, res) => {
   try {
-    const { channel_map, volume, muted } = req.body
-    const ok = setDeckAudioLive({ channel_map, volume, muted })
+    const { window_id, streams, channel_map, volume, muted } = req.body
+    const ok = setDeckAudioLive({ window_id, streams, channel_map, volume, muted })
     res.status(200).json({ ok })
   } catch (error) {
     logger.error(`Error occurred while updating deck audio live: ${error}`)
@@ -220,15 +210,15 @@ router.put('/deck_audio/live', async (req, res) => {
   }
 })
 
-// 재생 중인 트랙 오디오의 볼륨/뮤트 라이브 변경 (슬라이더/토글 — 목록 재조회 없이 즉시).
-// 영속화는 별도로 PUT /track patch.audios 로. body {audioId, volume?, muted?}
+// 재생 중인 추가 오디오의 볼륨/뮤트/채널 라이브 변경 (슬라이더/토글/채널편집 — 재조회 없이 즉시).
+// 영속화는 별도로 PUT /track patch.audios 로. body {audioId, volume?, muted?, channels?}
 router.put('/track_audio/live', async (req, res) => {
   try {
-    const { audioId, volume, muted } = req.body
+    const { audioId, volume, muted, channels } = req.body
     if (!audioId) {
       return res.status(400).json({ error: 'audioId is required' })
     }
-    const ok = setTrackAudioLive(audioId, { volume, muted })
+    const ok = setTrackAudioLive(audioId, { volume, muted, channels })
     res.status(200).json({ ok })
   } catch (error) {
     logger.error(`Error occurred while updating track audio live: ${error}`)
