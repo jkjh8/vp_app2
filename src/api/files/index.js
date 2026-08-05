@@ -6,7 +6,7 @@ import { logger } from '../../logger/index.js'
 import { getTmpPath, getMediaPath } from './folders.js'
 import { playerRequest } from '../../player/index.js'
 
-import { dbFiles, dbPlaylists } from '../../db/index.js'
+import { dbFiles, dbFolders, dbPlaylists } from '../../db/index.js'
 
 // Phase 2.5: ffmpeg-static 제거 — 메타/썸네일을 네이티브 플레이어(GStreamer)에 위임.
 // setupFFmpeg는 하위호환용 no-op (main.js가 계속 호출).
@@ -95,10 +95,11 @@ const reserveMultipleFileNumbers = async (count) => {
   return reservations.map((r) => ({ uuid: r.uuid, number: r.number }))
 }
 
-// update된 파일 후처리 하기
-const postProcessFiles = async (files) => {
+// update된 파일 후처리 하기 (folderId: 업로드 대상 논리 폴더, null=루트)
+const postProcessFiles = async (files, folderId = null) => {
   const mediaPath = getMediaPath()
   const tmpPath = getTmpPath()
+  const targetFolderId = folderId === undefined || folderId === '' ? null : folderId
 
   // 모든 파일에 대해 번호를 미리 예약
   const reservations = await reserveMultipleFileNumbers(files.length)
@@ -167,6 +168,7 @@ const postProcessFiles = async (files) => {
             metadata,
             thumbnail: thumbnailPath,
             is_image: mimetype.startsWith('image/'),
+            folderId: targetFolderId,
             updatedAt: new Date(),
           },
         },
@@ -209,6 +211,46 @@ const convertforAMX = (str) => {
   return hexArray
 }
 
+// 파일들을 지정한 논리 폴더로 이동 (folderId만 갱신, 디스크는 그대로). folderId=null=루트.
+const moveFilesToFolder = async (uuids, folderId) => {
+  const list = Array.isArray(uuids) ? uuids : [uuids]
+  if (list.length === 0) return 0
+  const target = folderId === undefined || folderId === '' ? null : folderId
+  if (target !== null) {
+    const exists = await dbFolders.findOne({ _id: target })
+    if (!exists) {
+      const err = new Error('대상 폴더를 찾을 수 없습니다.')
+      err.status = 404
+      throw err
+    }
+  }
+  return await dbFiles.update(
+    { uuid: { $in: list } },
+    { $set: { folderId: target } },
+    { multi: true },
+  )
+}
+
+// 여러 파일을 한 번에 삭제 (각 uuid 폴더를 디스크에서 제거 + DB 문서 삭제).
+// 개별 실패는 로깅 후 계속 진행. 반환: 실제 삭제된 DB 문서 수.
+const deleteFilesByUuids = async (uuids) => {
+  const list = Array.isArray(uuids) ? uuids : [uuids]
+  if (list.length === 0) return 0
+  const mediaPath = getMediaPath()
+  let removed = 0
+  for (const uuid of list) {
+    try {
+      // rmSync(force): 폴더가 이미 없어도 통과 — 디스크/DB가 어긋난 유령 문서도 지울 수 있게.
+      const fileDir = path.join(mediaPath, uuid)
+      fs.rmSync(fileDir, { recursive: true, force: true })
+      removed += (await dbFiles.remove({ uuid })) || 0
+    } catch (error) {
+      logger.error(`Error deleting file ${uuid}: ${error}`)
+    }
+  }
+  return removed
+}
+
 const resetAllMediaFiles = async () => {
   const mediaPath = getMediaPath()
   try {
@@ -224,6 +266,7 @@ const resetAllMediaFiles = async () => {
     }
     // dbFiles초기화
     await dbFiles.remove({}, { multi: true })
+    await dbFolders.remove({}, { multi: true })
     await dbPlaylists.remove({}, { multi: true })
   } catch (error) {
     logger.error('Error resetting media files:', error)
@@ -236,5 +279,7 @@ export {
   postProcessFiles,
   insertFileWithUniqueNumber,
   convertforAMX,
+  moveFilesToFolder,
+  deleteFilesByUuids,
   resetAllMediaFiles,
 }

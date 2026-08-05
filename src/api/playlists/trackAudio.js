@@ -203,6 +203,22 @@ const resumeTrackAudios = () => {
   }
 }
 
+// 특정 창의 추가 오디오만 일시정지/재개 (윈도우 모드 창별 제어). ids = windowStates[W].audioIds.
+const pauseAudios = (ids) => {
+  for (const id of ids || []) {
+    const t = pStatus.audioTracks[id]
+    if (t && t.is_playing) playerSend({ command: 'audio_track_pause', track_id: id })
+  }
+}
+const resumeAudios = (ids) => {
+  for (const id of ids || []) {
+    const t = pStatus.audioTracks[id]
+    if (t && !t.is_playing && t.state === 'paused') {
+      playerSend({ command: 'audio_track_pause', track_id: id })
+    }
+  }
+}
+
 // 재생 중인 추가 오디오의 볼륨/뮤트/채널 라이브 변경 (슬라이더/토글/채널편집용, 목록 재조회 없이).
 // channels(채널별 [{out,volume,muted}])가 있으면 audio_track_set_channel_map으로 라이브 적용 —
 // 윈도우 모드는 editPlaylist가 syncTrackAudios를 안 타므로 여기서 직접 적용해야 라이브가 된다.
@@ -232,6 +248,8 @@ export {
   stopAllTrackAudios,
   pauseTrackAudios,
   resumeTrackAudios,
+  pauseAudios,
+  resumeAudios,
   setTrackAudioLive,
   setDeckAudioLive,
   startAudios,

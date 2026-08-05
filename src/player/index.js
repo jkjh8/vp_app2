@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import { createConnection } from 'net'
+import { statSync } from 'fs'
 import { logger } from '../logger/index.js'
 import { app } from '../runtime.js'
 import path from 'path'
@@ -29,16 +30,40 @@ const buildDisplayArgs = () => {
   ]
 }
 
+const mtimeMs = (p) => {
+  try {
+    return statSync(p).mtimeMs
+  } catch {
+    return -1
+  }
+}
+
 const resolveNativePlayer = () => {
   if (process.env.NODE_ENV === 'development') {
-    // 개발: 형제 리포 vp_player의 빌드 산출물 + 시스템 GStreamer bin을 PATH에 주입
-    const exe =
-      process.env.VP_PLAYER_EXE ||
-      path.resolve('../vp_player/build/Debug/vplayer.exe')
     const gstRoot =
       process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 ||
       'C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64' // MSI 기본 설치 경로 폴백
-    return { exe, args: buildDisplayArgs(), extraPath: path.join(gstRoot, 'bin') }
+    const gstBin = path.join(gstRoot, 'bin')
+
+    // 개발 플레이어 선택 우선순위:
+    //  1) VP_PLAYER_EXE — 명시 지정 (시스템 GStreamer 필요 가정)
+    //  2) dist 번들(../vp_player/dist/player, 패키징과 동일 = gst 자체 동봉)과
+    //     build/Debug(직접 빌드 = 시스템 gst) 중 "더 최근에 빌드된" 쪽 자동 선택.
+    //     → 앱 개발자는 최신 dist를, 플레이어 개발자는 갓 빌드한 Debug를 쓰게 되어
+    //       구버전이 뜨는 문제를 방지한다.
+    if (process.env.VP_PLAYER_EXE) {
+      return { exe: process.env.VP_PLAYER_EXE, args: buildDisplayArgs(), extraPath: gstBin }
+    }
+    const distExe = path.resolve('../vp_player/dist/player/vplayer.exe')
+    const debugExe = path.resolve('../vp_player/build/Debug/vplayer.exe')
+    const distT = mtimeMs(distExe)
+    const debugT = mtimeMs(debugExe)
+    // dist가 존재하고 Debug보다 오래되지 않았으면 dist(자체 동봉 → 시스템 gst PATH 불필요)
+    if (distT >= 0 && distT >= debugT) {
+      return { exe: distExe, args: buildDisplayArgs(), extraPath: null }
+    }
+    // 그 외(Debug가 더 최신이거나 dist 부재) → build/Debug + 시스템 GStreamer bin 주입
+    return { exe: debugExe, args: buildDisplayArgs(), extraPath: gstBin }
   }
   // 배포: player/vplayer.exe + 동봉된 gst-bundle (vplayer가 스스로 GST_PLUGIN_PATH 설정)
   const appDir = path.dirname(process.resourcesPath || app.getPath('exe'))
@@ -100,7 +125,19 @@ const startPlayer = () => {
   })
 
   player.stderr.on('data', (data) => {
-    logger.error(`Player stderr: ${data}`)
+    // 플레이어의 진짜 오류는 stdout JSON({type:'error'})으로 parser를 타고 온다. stderr는 대부분
+    // GLib/GStreamer 자체 진단 노이즈다. 알려진 무해 패턴(비치명적 g_critical/warning)은 debug로
+    // 강등해 로그를 깔끔하게 유지하고, 그 외(실제 크래시/스택 등)만 error로 남긴다.
+    // 대표 노이즈: 덱 빌드 시 오디오 mix-matrix(converter-config) 적용에서 나오는
+    //   gst_structure_set: assertion 'IS_MUTABLE (...)' failed — 재생 무영향(GStreamer가 무시).
+    const NOISE =
+      /IS_MUTABLE|GStreamer-CRITICAL|GStreamer-WARNING|GLib(-GObject)?-(CRITICAL|WARNING)/
+    for (const raw of data.toString().split('\n')) {
+      const line = raw.trim()
+      if (!line) continue // 빈 줄 무시
+      if (NOISE.test(line)) logger.debug(`Player stderr(noise): ${line}`)
+      else logger.error(`Player stderr: ${line}`)
+    }
   })
 
   player.on('error', (error) => {

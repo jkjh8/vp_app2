@@ -22,6 +22,16 @@ let lastEndReachedEvent = null
 // audio_track_data SPA 발신 스로틀 (트랙당 100ms 틱 × N트랙 홍수 방지)
 const audioTrackEmitAt = {}
 const AUDIO_TRACK_EMIT_INTERVAL_MS = 300
+// windowStates 창별 player 틱 SPA 발신 스로틀 (창 N개 × 매 틱 → 소켓 홍수 방지)
+let windowStatesEmitAt = 0
+const WINDOW_STATES_EMIT_INTERVAL_MS = 200
+function emitWindowStatesThrottled() {
+  const now = Date.now()
+  if (now - windowStatesEmitAt >= WINDOW_STATES_EMIT_INTERVAL_MS) {
+    windowStatesEmitAt = now
+    ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+  }
+}
 // timeline_position SPA 발신 스로틀 (플레이어 250ms 틱을 SPA엔 ~200ms로 통과)
 let timelinePosEmitAt = 0
 const TIMELINE_POS_EMIT_INTERVAL_MS = 200
@@ -289,8 +299,27 @@ const parsePlayerStatus = async (data) => {
         logger.debug(`Active player ID: ${pStatus.activePlayerId}`)
         break
 
-      case 'player_data':
-        // 플레이어 상태 업데이트 (active player만 반영)
+      case 'player_data': {
+        // 멀티 윈도우(v3): 창별 재생 시간(windowStates[W].player) 갱신. 플레이어는 매 틱 모든 창의
+        // player_data를 window_id와 함께 보낸다(player_core.cpp). 이 창별 값으로 UI가 씬 모드는
+        // 창들의 최댓값(= 가장 긴 미디어)을, 윈도우 모드는 선택한 창의 시간을 표시한다.
+        // (정지/전환으로 windowStates[W]가 지워진 창은 뒤늦은 틱을 무시 — 좀비 방지.)
+        const W = msgData.window_id
+        if (W != null && pStatus.windowStates && pStatus.windowStates[W]) {
+          const wp = pStatus.windowStates[W].player || {}
+          pStatus.windowStates[W].player = {
+            ...wp,
+            time: msgData.time ?? wp.time ?? 0,
+            duration: msgData.duration ?? wp.duration ?? 0,
+            position: msgData.position ?? wp.position ?? 0,
+            event: msgData.event ?? wp.event,
+            is_playing:
+              msgData.is_playing !== undefined ? msgData.is_playing : wp.is_playing,
+          }
+          emitWindowStatesThrottled()
+        }
+
+        // 하위호환/단일(레거시) 모드: 전역 player (active 덱만 반영)
         if (
           msgData.id === pStatus.activePlayerId ||
           pStatus.activePlayerId == null
@@ -310,6 +339,7 @@ const parsePlayerStatus = async (data) => {
           ioClient.emit('pStatus', { player: pStatus.player })
         }
         break
+      }
 
       case 'media_changed':
         await handleMediaChanged(msgData)

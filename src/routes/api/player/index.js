@@ -31,9 +31,11 @@ const router = express.Router()
 
 // 단일 파일 직접 재생(playid) REST는 폐지 — 플레이어 출력은 플레이리스트(장면/윈도우)로만 구동하고
 // Files는 브라우저 미리보기(/api/files/raw)만 제공한다. (TCP 외부제어 playid는 레거시로 유지.)
+// windowId(쿼리) 지정 + 윈도우 모드면 그 창만 제어, 아니면 전 창(:id는 레거시 activePlayerId, 미사용)
 router.get('/play/:id', async (req, res) => {
   try {
-    const result = await play(Number(req.params.id))
+    const wid = req.query.windowId != null ? Number(req.query.windowId) : null
+    const result = await play(wid)
     res.status(200).json({ message: result })
   } catch (error) {
     logger.error('Error occurred while playing media:', error)
@@ -41,9 +43,11 @@ router.get('/play/:id', async (req, res) => {
   }
 })
 
+// windowId 지정 = 그 창만 정지 / 미지정 = 전체 정지(Stop All)
 router.get('/stop', (req, res) => {
   try {
-    const result = stop()
+    const wid = req.query.windowId != null ? Number(req.query.windowId) : null
+    const result = stop(wid)
     res.status(200).json({ message: result })
   } catch (error) {
     logger.error('Error occurred while stopping media:', error)
@@ -53,7 +57,8 @@ router.get('/stop', (req, res) => {
 
 router.get('/pause/:id', async (req, res) => {
   try {
-    const result = await pause(Number(req.params.id))
+    const wid = req.query.windowId != null ? Number(req.query.windowId) : null
+    const result = await pause(wid)
     res.status(200).json({ message: result })
   } catch (error) {
     logger.error('Error occurred while pausing media:', error)
@@ -140,7 +145,9 @@ router.get('/repeat', async (req, res) => {
 
 router.get('/next', async (req, res) => {
   try {
-    const result = await setNext()
+    // 윈도우 모드: 선택된 창만 넘기도록 windowId 전달 (미지정=씬 전 창 / 윈도우 첫 창 폴백)
+    const wid = req.query.windowId != null ? Number(req.query.windowId) : null
+    const result = await setNext(wid)
     res.status(200).json({ message: result })
   } catch (error) {
     logger.error('Error occurred while setting next track:', error)
@@ -150,7 +157,8 @@ router.get('/next', async (req, res) => {
 
 router.get('/prev', async (req, res) => {
   try {
-    const result = await setPrevious()
+    const wid = req.query.windowId != null ? Number(req.query.windowId) : null
+    const result = await setPrevious(wid)
     res.status(200).json({ message: result })
   } catch (error) {
     logger.error('Error occurred while setting previous track:', error)

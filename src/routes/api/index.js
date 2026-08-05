@@ -1,5 +1,6 @@
 import express from 'express'
 import filesRouter from './files/index.js'
+import foldersRouter from './folders/index.js'
 import playerRouter from './player/index.js'
 import statusRouter from './status/index.js'
 import playlistRouter from './playlist/index.js'
@@ -7,6 +8,7 @@ import timelineRouter from './timeline/index.js'
 
 const router = express.Router()
 router.use('/files', filesRouter)
+router.use('/folders', foldersRouter)
 router.use('/player', playerRouter)
 router.use('/status', statusRouter)
 router.use('/playlist', playlistRouter)

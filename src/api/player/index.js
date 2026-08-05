@@ -82,8 +82,9 @@ const playFoundFile = async (text) => {
   }
 }
 
-const play = () => {
-  logger.info('Received play request without ID')
+// windowId 지정 + 윈도우 모드 → 그 창만 재생/재개. 그 외 → 전 창 일괄(씬 락스텝 / 윈도우 전체 시작).
+const play = (windowId = null) => {
+  logger.info(`Play request${windowId != null ? ` (window ${windowId})` : ''}`)
 
   // 타임라인 모드: 플레이어가 클록 소유 — pause 토글로 재개 (timeline_play는 전용 API 경유)
   if (pStatus.timelineMode) {
@@ -91,15 +92,34 @@ const play = () => {
     return 'Timeline resumed'
   }
 
-  // 덱이 일시정지 상태(로드 유지)면 이어서 재생, 그 외(정지/최초)에는 파일을 다시 로드
-  const isPaused = pStatus.player.event === 'paused'
-
-  // 플레이리스트/장면 모드
   if (pStatus.playlistMode) {
+    const isWindowMode = pStatus.playlist?.mode === 'window'
+    // 윈도우 모드 + 선택 창: 그 창만 (일시정지면 재개, 정지면 시작)
+    if (isWindowMode && windowId != null) {
+      const W = Number(windowId)
+      const st = pStatus.windowStates[W]
+      if (st) {
+        if (st.player?.event === 'paused') {
+          playerSend({ command: 'play', window_id: W })
+          import('../playlists/trackAudio.js')
+            .then(({ resumeAudios }) => resumeAudios(st.audioIds))
+            .catch(() => {})
+        }
+      } else {
+        // 정지 상태 → 그 창 시작
+        import('../playlists/index.js')
+          .then(({ playWindow }) => playWindow(W, 0))
+          .catch((e) => logger.error(`playWindow failed: ${e}`))
+      }
+      broadcastEvent(TCP_EVENTS.PLAY_STARTED, { fileId: null, filename: st?.filename || null })
+      return `play window ${W}`
+    }
+
+    // 씬 모드(또는 windowId 없음): 전 창 일괄 재개 / 재시작
+    const isPaused = pStatus.player.event === 'paused'
     const wins = Object.keys(pStatus.windowStates || {})
     if (isPaused && wins.length) {
-      // 장면 모드: 전 창 일괄 재개
-      logger.info('Scene mode: resuming all windows')
+      logger.info('Resuming all windows')
       wins.forEach((w) => playerSend({ command: 'play', window_id: Number(w) }))
       resumeTrackAudios()
       broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
@@ -125,7 +145,7 @@ const play = () => {
   }
 
   // 일반 모드: 일시정지면 이어서 재생
-  if (isPaused) {
+  if (pStatus.player.event === 'paused') {
     playerSend({ command: 'play', idx: pStatus.activePlayerId || 0 })
     broadcastEvent(TCP_EVENTS.PLAY_STARTED, {
       fileId: pStatus.file?.number || null,
@@ -148,16 +168,33 @@ const play = () => {
   return `Playing file: ${pStatus.file.path}`
 }
 
-const pause = () => {
-  logger.info('Received pause request')
+// windowId 지정 + 윈도우 모드 → 그 창만 일시정지/재개 토글. 그 외 → 전 창 일괄.
+const pause = (windowId = null) => {
+  logger.info(`Pause request${windowId != null ? ` (window ${windowId})` : ''}`)
   // 타임라인 모드: timeline_pause 토글 (플레이어가 전 덱/오디오 트랙을 일괄 일시정지/재개)
   if (pStatus.timelineMode) {
     timelinePause()
     return 'Timeline paused/resumed'
   }
-  // 플레이어의 pause는 토글 — 레인도 토글 전 덱 상태를 따라 같은 방향으로 움직인다
+
+  // 윈도우 모드 + 선택 창: 그 창 덱+오디오만 토글
+  if (pStatus.playlistMode && pStatus.playlist?.mode === 'window' && windowId != null) {
+    const W = Number(windowId)
+    const st = pStatus.windowStates[W]
+    if (!st) return 'window not playing'
+    const wasPaused = st.player?.event === 'paused'
+    playerSend({ command: 'pause', window_id: W }) // 플레이어 pause는 토글
+    import('../playlists/trackAudio.js')
+      .then(({ pauseAudios, resumeAudios }) =>
+        wasPaused ? resumeAudios(st.audioIds) : pauseAudios(st.audioIds),
+      )
+      .catch(() => {})
+    broadcastEvent(TCP_EVENTS.PLAY_PAUSED, { fileId: null })
+    return `pause toggle window ${W}`
+  }
+
+  // 씬 모드(또는 windowId 없음): 전 창 일괄 일시정지/재개
   const wasPaused = pStatus.player.event === 'paused'
-  // 장면 모드: 전 창 일괄 일시정지/재개 (player pause는 창별 토글)
   const wins = Object.keys(pStatus.windowStates || {})
   if (pStatus.playlistMode && wins.length) {
     wins.forEach((w) => playerSend({ command: 'pause', window_id: Number(w) }))
@@ -174,19 +211,30 @@ const pause = () => {
   return 'Player paused'
 }
 
-const stop = () => {
-  logger.info('Received stop request')
+// windowId 지정 + 윈도우 모드 → 그 창만 정지. 그 외 → 전 창 정지(stop-all: 씬 모드 / windowId 미지정).
+const stop = (windowId = null) => {
+  logger.info(`Stop request${windowId != null ? ` (window ${windowId})` : ''}`)
   // 타임라인 모드: 전용 정지 (해체 + 모드 해제 + 위치 초기화)
   if (pStatus.timelineMode) {
     timelineStop()
     broadcastEvent(TCP_EVENTS.PLAY_STOPPED, {})
     return 'Timeline stopped'
   }
-  // 플레이리스트/장면 모드: 전 창 동시 정지 + 장면 상태/창 상태 초기화
+
+  // 윈도우 모드 + 선택 창: 그 창만 정지 (다른 창은 계속)
+  if (pStatus.playlistMode && pStatus.playlist?.mode === 'window' && windowId != null) {
+    const W = Number(windowId)
+    import('../playlists/index.js')
+      .then(({ stopWindow }) => stopWindow(W))
+      .catch((e) => logger.error(`stopWindow failed: ${e}`))
+    broadcastEvent(TCP_EVENTS.PLAY_STOPPED, { windowId: W })
+    return `stop window ${W}`
+  }
+
+  // 전 창 정지 (씬 모드 또는 전체 정지)
   if (pStatus.playlistMode) {
     logger.info('Playlist mode: stopping all players')
     playerSend({ command: 'stop_all' })
-    // 장면 컨트롤러 + windowStates 초기화 (UI가 전 창 정지를 즉시 반영)
     import('../playlists/index.js')
       .then(({ resetScenes }) => resetScenes())
       .catch(() => {})
@@ -198,11 +246,16 @@ const stop = () => {
   return 'Player stopped'
 }
 
-const updateTime = (time) => {
+const updateTime = (time, windowId) => {
   // 타임라인 모드: time은 이미 ms (clientNamespace가 초×1000) → timeline_seek(ms)
   if (pStatus.timelineMode) {
     timelineSeek(Math.round(Number(time)))
     return `Timeline seek to: ${time}ms`
+  }
+  // 윈도우 모드: 선택한 창만 시크 (다른 창은 그대로). 미지정이면 기본 창/활성 덱.
+  if (windowId != null) {
+    playerSend({ command: 'set_time', time, window_id: Number(windowId) })
+    return `Time updated to: ${time} (window ${windowId})`
   }
   playerSend({ command: 'set_time', time, idx: pStatus.activePlayerId || 0 })
   return `Time updated to: ${time}`
@@ -376,88 +429,50 @@ const setRepeat = async (mode = null) => {
   return pStatus.repeat
 }
 
-const setNext = async () => {
-  logger.info('Setting next track in playlist')
-  if (pStatus.playlistMode) {
-    const tracks = pStatus.playlist.tracks
-    pStatus.trackId += 1
-    if (pStatus.trackId >= tracks.length) {
-      pStatus.trackId = 0 // Loop back to the start
-    }
-
-    const currentTrack = tracks[pStatus.trackId]
-    const nextTrack = tracks[pStatus.trackId + 1] || null
-
-    // 이미지 타이머 정보 포함
-    const currentTime = currentTrack.is_image
-      ? currentTrack.time || 5
-      : undefined
-    const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
-
-    // playFile 대신 직접 playerSend 호출하여 타이머 정보 전달
-    playerSend({
-      command: 'play_current_and_load_next',
-      current: currentTrack,
-      next: nextTrack,
-      track_idx: pStatus.trackId,
-      current_time: currentTime,
-      next_time: nextTime,
-    })
-
-    pStatus.file = currentTrack
-    ioClient.emit('pStatus', { trackId: pStatus.trackId, file: pStatus.file })
+// 다음 트랙(장면/항목)으로 — 씬 모드는 전 창 락스텝 전진, 윈도우 모드는 창별 다음 항목.
+// (구현은 장면/윈도우 컨트롤러 manualStep에 위임. 예전 플랫 트랙 방식은 씬 객체를 파일로 보내
+//  씬/윈도우 모드에서 아예 동작하지 않았다.)
+// 다음 트랙 — 윈도우 모드는 선택된 창(windowId)만 넘긴다(전 창 동시 넘김 금지).
+const setNext = async (windowId = null) => {
+  logger.info(`Next track requested${windowId != null ? ` (window ${windowId})` : ''}`)
+  if (!pStatus.playlistMode) return 'Not in playlist mode'
+  const { manualStep, multiWin } = await import('../playlists/index.js')
+  if (multiWin()) {
+    manualStep(1, windowId)
     broadcastEvent(TCP_EVENTS.NEXT_TRACK, {
-      playlistId: pStatus.playlist.playlistId,
+      playlistId: pStatus.playlist?.playlistId,
       trackId: pStatus.trackId,
-      filename: currentTrack?.filename,
+      filename: pStatus.file?.filename,
     })
+    return 'Next track'
   }
-  return 'Next track set'
+  logger.warn('setNext: multi-window player required')
+  return 'Next unsupported (legacy player)'
 }
 
-const setPrevious = async () => {
-  logger.info('Setting previous track in playlist')
-  if (pStatus.playlistMode) {
-    if (pStatus.player.time < 5000) {
-      if (pStatus.trackId > 0) {
-        pStatus.trackId -= 1
-
-        const tracks = pStatus.playlist.tracks
-        const currentTrack = tracks[pStatus.trackId]
-        const nextTrack = tracks[pStatus.trackId + 1] || null
-
-        // 이미지 타이머 정보 포함
-        const currentTime = currentTrack.is_image
-          ? currentTrack.time || 5
-          : undefined
-        const nextTime = nextTrack?.is_image ? nextTrack.time || 5 : undefined
-
-        // playFile 대신 직접 playerSend 호출하여 타이머 정보 전달
-        playerSend({
-          command: 'play_current_and_load_next',
-          current: currentTrack,
-          next: nextTrack,
-          track_idx: pStatus.trackId,
-          current_time: currentTime,
-          next_time: nextTime,
-        })
-
-        pStatus.file = currentTrack
-        ioClient.emit('pStatus', {
-          trackId: pStatus.trackId,
-          file: pStatus.file,
-        })
-        broadcastEvent(TCP_EVENTS.PREV_TRACK, {
-          playlistId: pStatus.playlist.playlistId,
-          trackId: pStatus.trackId,
-          filename: currentTrack?.filename,
-        })
-        return 'Previous track set'
-      }
-    }
+// 이전 트랙 — 미디어 플레이어 관례: 진행이 3초↑면 현재 항목 처음으로, 아니면 이전 항목.
+// 윈도우 모드는 선택된 창(windowId)만, 씬 모드는 전 창 락스텝.
+const setPrevious = async (windowId = null) => {
+  logger.info(`Previous track requested${windowId != null ? ` (window ${windowId})` : ''}`)
+  if (!pStatus.playlistMode) return 'Not in playlist mode'
+  const { manualStep, multiWin } = await import('../playlists/index.js')
+  if (multiWin()) {
+    const isWindow = pStatus.playlist?.mode === 'window'
+    // 경과시간(내 parser가 windowStates[W].player.time 갱신). 윈도우=선택 창, 씬=전 창 최댓값.
+    const elapsed = isWindow
+      ? (windowId != null ? pStatus.windowStates[Number(windowId)]?.player?.time : 0) || 0
+      : Math.max(0, ...Object.values(pStatus.windowStates || {}).map((st) => st?.player?.time || 0))
+    const delta = elapsed > 3000 ? 0 : -1 // 0 = 현재 항목/장면 재시작
+    manualStep(delta, windowId)
+    broadcastEvent(TCP_EVENTS.PREV_TRACK, {
+      playlistId: pStatus.playlist?.playlistId,
+      trackId: pStatus.trackId,
+      filename: pStatus.file?.filename,
+    })
+    return 'Previous track'
   }
-  updateTime(0)
-  return 'Previous track set'
+  logger.warn('setPrevious: multi-window player required')
+  return 'Previous unsupported (legacy player)'
 }
 
 export {

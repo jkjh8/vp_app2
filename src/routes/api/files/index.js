@@ -6,6 +6,8 @@ import { logger } from '../../../logger/index.js'
 import { dbFiles } from '../../../db/index.js'
 import {
   postProcessFiles,
+  moveFilesToFolder,
+  deleteFilesByUuids,
   resetAllMediaFiles,
 } from '../../../api/files/index.js'
 import { getTmpPath, getMediaPath } from '../../../api/files/folders.js'
@@ -36,13 +38,29 @@ router.get('/', async (req, res) => {
 router.post('/', upload.any(), async (req, res) => {
   try {
     const files = req.files
-    await postProcessFiles(files)
+    // multer.any()가 텍스트 필드(folderId)도 req.body로 파싱 — 업로드 대상 폴더
+    await postProcessFiles(files, req.body.folderId || null)
     return res
       .status(200)
       .json({ message: 'Files processed successfully', files })
   } catch (error) {
     logger.error(`Error processing files: ${error}`)
     return res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+// 파일을 논리 폴더로 이동 (folderId만 갱신)
+router.put('/move', async (req, res) => {
+  const { uuids, folderId } = req.body
+  try {
+    if (!uuids || (Array.isArray(uuids) && uuids.length === 0)) {
+      return res.status(400).json({ error: 'uuids is required' })
+    }
+    const moved = await moveFilesToFolder(uuids, folderId ?? null)
+    res.status(200).json({ message: 'Files moved successfully', moved })
+  } catch (error) {
+    logger.error(`Error moving files: ${error}`)
+    res.status(error.status || 500).json({ error: error.message || 'Internal Server Error' })
   }
 })
 
@@ -54,6 +72,21 @@ router.get('/thumbnail/:uuid', async (req, res) => {
     res.sendFile(file.thumbnail)
   } catch (error) {
     logger.error(`Error fetching thumbnail: ${error}`)
+    res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+// 여러 파일 일괄 삭제 (body: { uuids: [...] })
+router.delete('/', async (req, res) => {
+  const { uuids } = req.body || {}
+  try {
+    if (!uuids || (Array.isArray(uuids) && uuids.length === 0)) {
+      return res.status(400).json({ error: 'uuids is required' })
+    }
+    const removed = await deleteFilesByUuids(uuids)
+    res.status(200).json({ message: 'Files deleted successfully', removed })
+  } catch (error) {
+    logger.error(`Error deleting files: ${error}`)
     res.status(500).json({ error: 'Internal Server Error' })
   }
 })

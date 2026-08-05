@@ -24,6 +24,10 @@ const hydrateTrackAudios = async (audios) => {
         logger.warn(`Audio file not found for track audio: ${a.uuid}`)
         return null
       }
+      if (!af.path) {
+        logger.warn(`Audio file has no path, skipping: ${a.uuid}`)
+        return null
+      }
       return {
         id: a.id,
         uuid: a.uuid,
@@ -48,6 +52,11 @@ const hydrateClip = async (clip) => {
   const file = await dbFiles.findOne({ uuid: clip.uuid })
   if (!file) {
     logger.warn(`File not found for clip uuid: ${clip.uuid}`)
+    return null
+  }
+  // path 없는 파일(손상/이관 데이터)은 제외 — 플레이어 filesrc가 빈 경로→작업폴더를 열려다 실패한다.
+  if (!file.path) {
+    logger.warn(`File has no path, skipping clip: ${clip.uuid}`)
     return null
   }
   return {
@@ -100,13 +109,20 @@ const getTrackWithFileInfo = async (tracks) => {
   return results.filter((item) => item !== null && item !== undefined && item.clips.length > 0)
 }
 
+// 이미지 판정 — is_image 필드 + mimetype 폴백. 구 파일/일부 경로는 is_image가 비어있을 수 있는데,
+// 그 경우 resolveImageTime이 undefined→time 0을 내려 플레이어가 이미지 타이머를 안 걸어(SwapTo의
+// `image_time_ms > 0` 게이트) 이미지가 다음으로 안 넘어간다. mimetype로도 판정해 항상 타이머가 걸리게 한다.
+const isImageFile = (f) =>
+  f?.is_image === true ||
+  (typeof f?.mimetype === 'string' && f.mimetype.startsWith('image/'))
+
 // 이미지 트랙의 표시 시간(초) 결정.
 // - time이 명시적으로(0이 아닌 값) 설정돼 있으면 그 값을 강제 사용.
 // - time이 0/미설정이면 붙어있는 추가 오디오의 길이(metadata.format.duration, 초 단위
 //   문자열 — vplayer probe_media가 std::to_string(double)로 내려줌)를 사용.
 // - 오디오가 없거나 길이를 못 구하면 기존 기본값 5초로 폴백.
 const resolveImageTime = (track) => {
-  if (!track?.is_image) return undefined
+  if (!isImageFile(track)) return undefined
   if (track.time) return track.time
   const audios = Array.isArray(track.audios) ? track.audios : []
   for (const a of audios) {
@@ -247,7 +263,10 @@ const setPlaylist = async (playlistId) => {
       logger.error('Playlist ID is required')
       return null
     }
-    const playlist = await dbPlaylists.findOne({ playlistId })
+    // 하이드레이션(uuid→파일 조인으로 path 채움)해서 저장 — raw로 두면 이 플레이리스트를 그대로
+    // 재생할 때 clip.path가 비어 플레이어가 잘못된 경로를 열려다 실패한다(playlistPlay가 같은
+    // playlistId면 재조회를 건너뛰므로 여기서 하이드레이션이 필수).
+    const playlist = await getPlaylist(playlistId)
     if (!playlist) {
       logger.error('Playlist not found')
       return null
@@ -603,7 +622,7 @@ const toPlayerFile = (clip) => {
   return {
     path: clip.path,
     uuid: clip.uuid,
-    is_image: clip.is_image,
+    is_image: isImageFile(clip), // is_image 누락 파일도 mimetype로 이미지 판정 (타이머 보장)
     mimetype: clip.mimetype,
     time: t !== undefined ? t : clip.time || 0,
     delay_ms: Number.isFinite(clip.delay_ms) ? clip.delay_ms : 0,
@@ -821,7 +840,14 @@ const preloadScenes = (sceneIdx = 0) => {
   const known = configuredWindowIds()
   const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
 
-  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+  // 윈도우형: 전체 메모리 프리롤 대신 "다음 트랙만" 로딩(lookahead=1). 창들이 독립 재생이라
+  // 락스텝 전체 프리롤이 불필요하고 메모리도 절약. 장면형: 기존 설정 유지(전체 프리롤).
+  const isWindowMode = pStatus.playlist?.mode === 'window'
+  const lookahead = isWindowMode
+    ? 1
+    : Number.isInteger(pStatus.preloadLookahead)
+      ? pStatus.preloadLookahead
+      : 2
   const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
   playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
   ensureWindows(windowIds)
@@ -846,7 +872,10 @@ const preloadPlaylistOnly = async (playlistId) => {
   preloadScenes(0)
   pStatus.preloadedPlaylistId = playlistId
   ioClient.emit('pStatus', { playlist: pStatus.playlist, preloadedPlaylistId: playlistId })
-  logger.info(`Preloaded playlist ${playlistId} (${(playlist.tracks || []).length} scenes)`)
+  const loadKind = playlist.mode === 'window' ? 'window(next-track only)' : 'scene(full)'
+  logger.info(
+    `Preloaded playlist ${playlistId} [${loadKind}] (${(playlist.tracks || []).length} tracks)`,
+  )
   return `Preloaded ${playlistId}`
 }
 
@@ -854,14 +883,25 @@ const preloadPlaylistOnly = async (playlistId) => {
 // 하지 않는다(그건 "로딩" 버튼 몫). 이미 로딩(프리로드)된 상태면 풀에서 즉시 승격돼 무지연.
 // (예전엔 재생 시 전 트랙 풀을 동시에 프리롤해 현재 클립 프리롤이 경쟁 → 시작이 수십 초 지연.)
 const startScenes = (sceneIdx, startAt = null) => {
-  const scenes = pStatus.playlist.tracks || []
-  const known = configuredWindowIds()
-  const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
-  const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
-  const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
-  playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
-  ensureWindows(windowIds)
-  playScene(sceneIdx, startAt) // 현재+다음만 빌드 → 즉시 시작 (풀 있으면 승격)
+  // 프리롤 풀 시퀀스를 먼저 깐다(preload_playlist). 시퀀스가 없으면 플레이어의 FillPool이 no-op이라
+  // (player_core: FillPool은 sequence 비어있으면 return) 장면 전환 시 다음 덱을 스탠바이에서
+  // 재빌드 → 영상이 튀고(hitch) play_synced 배리어가 즉시 못 터져 창들이 제각각 스왑(동시성 깨짐).
+  // 시퀀스를 깔면 전환이 풀 승격(무지연) + 배리어 즉시 발화(전 창 동시 스왑)로 처리되고, 라이브가
+  // 될 때마다 FillPool이 다음 장면을 계속 미리 프리롤한다.
+  // 이미 로딩(프리로드)된 플레이리스트면 재프리롤하지 않는다(풀 유지 = 로딩 이점·시작속도 보존).
+  if (pStatus.preloadedPlaylistId === pStatus.playlist?.playlistId) {
+    const known = configuredWindowIds()
+    const windowIds = windowsInScenes(pStatus.playlist.tracks || []).filter((w) => known.has(w))
+    const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
+    const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
+    playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
+    ensureWindows(windowIds)
+  } else {
+    preloadScenes(sceneIdx) // set_preload_config + ensureWindows + 창별 preload_playlist(시퀀스+풀)
+    pStatus.preloadedPlaylistId = pStatus.playlist?.playlistId ?? null
+    ioClient.emit('pStatus', { preloadedPlaylistId: pStatus.preloadedPlaylistId })
+  }
+  playScene(sceneIdx, startAt) // 풀에 있으면 즉시 승격, 없으면 현재만 빌드해 빠른 시작
 }
 
 // 장면 전환 — 현재 장면의 모든 활성 창이 끝났을 때 호출 (동기 전환)
@@ -961,9 +1001,15 @@ const applyWindowChannelDelays = () => {
 }
 
 // 창 항목 1개 재생 (+ 그 항목 추가 오디오 기동, 이전 오디오 정지). windowStates[W] 갱신.
-const playWindowItem = (W, seq, start) => {
+// preload=true면 시퀀스/풀을 (재)설정한다(최초 재생·창 재생 버튼용). 이미 재생 중인 창의 수동
+// Next/Prev에서는 preload=false로 호출한다 — 매번 preload_playlist(ClearPool)를 보내면 공유
+// 오디오 믹서(amix)에 물린 풀 덱을 해체하면서 새 덱을 빌드하다 레이스로 플레이어가 크래시
+// (0xC0000005)했다. 시퀀스는 이미 설정돼 있으므로 play_current_and_load_next만으로 풀에서 승격된다.
+const playWindowItem = (W, seq, start, preload = true) => {
   const files = seq.map((e) => fileForPlayer(e.clip))
-  playerSend({ command: 'preload_playlist', window_id: W, current_index: start, tracks: files })
+  if (preload) {
+    playerSend({ command: 'preload_playlist', window_id: W, current_index: start, tracks: files })
+  }
   playerSend({
     command: 'play_current_and_load_next',
     window_id: W,
@@ -1103,7 +1149,10 @@ const playWindow = (windowId, index = 0) => {
   ensureWindows([W])
   let start = Number(index)
   if (!Number.isInteger(start) || start < 0 || start >= seq.length) start = 0
-  playWindowItem(W, seq, start)
+  // 이미 재생 중인 창이면 시퀀스가 설정돼 있으므로 재프리롤하지 않는다(ClearPool+빌드 레이스 크래시
+  // 방지). 정지 상태(시퀀스 미설정)에서 시작할 때만 preload_playlist로 시퀀스를 깐다.
+  const wasPlaying = !!pStatus.windowStates[W]
+  playWindowItem(W, seq, start, !wasPlaying)
   applyWindowChannelDelays()
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
   logger.info(`Window ${W} play @${start}`)
@@ -1144,6 +1193,54 @@ const stopWindow = (windowId) => {
   return `stop window ${W}`
 }
 
+// ---------------------------------------------------------------------------
+// 수동 Next/Prev (트랜스포트 버튼) — 자동 전환(advanceScene/advanceWindowOnEnd)과 달리 repeat와
+// 무관하게 즉시 인접 장면/항목으로 점프. (기존 setNext/setPrevious는 폐기된 플랫 트랙 모델을 써서
+// 장면 객체를 파일로 전송 → 씬/윈도우 모드에서 동작 안 함. 여기 컨트롤러로 위임한다.)
+// ---------------------------------------------------------------------------
+
+// 씬 모드: 전 창을 인접 장면으로 (락스텝). delta 0 = 현재 장면 재시작.
+const stepScene = (delta) => {
+  const scenes = pStatus.playlist?.tracks || []
+  if (!scenes.length) return null
+  const base = Number.isInteger(currentSceneIdx) ? currentSceneIdx : Number(pStatus.trackId) || 0
+  let idx = base + delta
+  if (idx >= scenes.length) idx = 0
+  else if (idx < 0) idx = scenes.length - 1
+  playScene(idx)
+  logger.info(`Manual step scene → ${idx}`)
+  return idx
+}
+
+// 윈도우 모드: 선택된 창 1개만 자기 시퀀스의 다음/이전 항목으로 (창별 독립 제어).
+// windowId 미지정이면 재생 중인 첫 창으로 폴백. (전 창을 다 넘기지 않는다 — 선택 창만.)
+const stepWindow = (delta, windowId) => {
+  const scenes = pStatus.playlist?.tracks || []
+  let W = windowId != null ? Number(windowId) : null
+  if (W == null || !pStatus.windowStates[W]) {
+    W = Object.keys(pStatus.windowStates || {}).map(Number)[0]
+  }
+  if (W == null || !pStatus.windowStates[W]) return null
+  const seq = windowItemSequence(scenes, W)
+  if (!seq.length) return null
+  const cur = pStatus.windowStates[W]?.seqIndex ?? 0
+  let idx = cur + delta
+  if (idx >= seq.length) idx = 0
+  else if (idx < 0) idx = seq.length - 1
+  playWindowItem(W, seq, idx, false) // 재프리롤 금지(시퀀스 이미 설정) — ClearPool+빌드 레이스 크래시 방지
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+  logger.info(`Manual step window ${W} → ${idx}`)
+  return `window ${W} @${idx}`
+}
+
+// 수동 Next(+1)/Prev(-1)/재시작(0). 씬 모드=전 창 락스텝, 윈도우 모드=선택된 창(windowId)만.
+// 멀티윈도우 미지원이면 null(호출부 폴백).
+const manualStep = (delta, windowId = null) => {
+  if (!pStatus.playlistMode || !multiWin()) return null
+  return pStatus.playlist?.mode === 'window' ? stepWindow(delta, windowId) : stepScene(delta)
+}
+
 // slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (멀티캐스트 트리거 진입점)
 const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) => {
   if (
@@ -1172,17 +1269,15 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       logger.error('Cannot play playlist — player socket not connected')
       return null
     }
-    if (
-      Object.keys(pStatus.playlist).length === 0 ||
-      pStatus.playlist.playlistId !== playlistId
-    ) {
-      const playlist = await getPlaylist(playlistId)
-      if (!playlist) {
-        logger.error('Playlist not found for playback')
-        return null
-      }
-      pStatus.playlist = playlist
+    // 항상 최신 하이드레이션으로 로드 — select(setPlaylist)나 편집으로 pStatus.playlist가 raw이거나
+    // stale일 수 있어, 그대로 쓰면 clip.path가 비어 플레이어가 작업폴더를 열려다 preroll이 실패한다.
+    // getPlaylist가 uuid→파일 조인으로 path를 채우고 최신 트랙을 반영한다.
+    const playlist = await getPlaylist(playlistId)
+    if (!playlist) {
+      logger.error('Playlist not found for playback')
+      return null
     }
+    pStatus.playlist = playlist
     await setPlaylistMode(true)
     // trackId는 Python에서 update_track_index를 호출하여 설정하므로 여기서는 설정하지 않음
     // pStatus.trackId = Number(trackIdx)
@@ -1386,6 +1481,8 @@ export {
   playWindow,
   playWindowInPlaylist,
   stopWindow,
+  // 수동 Next/Prev
+  manualStep,
   // 멀티 PC(v3 Phase 5)
   startMultiWindowSynced,
 }

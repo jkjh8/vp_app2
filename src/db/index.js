@@ -5,6 +5,7 @@ import { app } from '../runtime.js'
 let db = null
 let dbStatus = null
 let dbFiles = null
+let dbFolders = null
 let dbPlaylists = null
 let dbTimelines = null
 
@@ -48,6 +49,12 @@ const initDb = () => {
         autoload: true,
       }),
     ),
+    folders: addTimestamps(
+      Datastore.create({
+        filename: path.join(dbPath, 'folders.db'),
+        autoload: true,
+      }),
+    ),
     playlists: addTimestamps(
       Datastore.create({
         filename: path.join(dbPath, 'playlists.db'),
@@ -63,9 +70,10 @@ const initDb = () => {
   }
   dbStatus = db.status
   dbFiles = db.files
+  dbFolders = db.folders
   dbPlaylists = db.playlists
   dbTimelines = db.timelines
   return db
 }
-export { initDb, dbStatus, dbFiles, dbPlaylists, dbTimelines }
+export { initDb, dbStatus, dbFiles, dbFolders, dbPlaylists, dbTimelines }
 export default db
