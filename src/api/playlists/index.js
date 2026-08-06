@@ -102,11 +102,14 @@ const getTrackWithFileInfo = async (tracks) => {
         return { ...scene, clips, audios }
       } catch (error) {
         logger.error(`Error hydrating scene:`, error)
-        return null
+        return { clips: [], audios: [] } // 실패 시 빈 장면으로 보존 (raw와 1:1 인덱스 정렬 유지)
       }
     }),
   )
-  return results.filter((item) => item !== null && item !== undefined && item.clips.length > 0)
+  // 빈 장면(clips/audios 없음)도 그대로 보존한다 — "장면 추가"로 만든 빈 트랙이 UI에서 편집 가능해야
+  // 하고, 재생 시에만 건너뛰기 때문. raw tracks와 1:1 인덱스가 유지되어야 editTrack(idx) 등이 어긋나지
+  // 않는다(예전엔 clips.length>0만 남겨 빈/미해결 장면에서 인덱스가 밀릴 수 있었다).
+  return results
 }
 
 // 이미지 판정 — is_image 필드 + mimetype 폴백. 구 파일/일부 경로는 is_image가 비어있을 수 있는데,
@@ -456,8 +459,12 @@ const editImageTime = async (playlistId, idx, time) => {
   }
 }
 
-// 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 = clips[](영상) + audios[](추가 오디오, 장면단위).
-const TRACK_PATCH_KEYS = ['clips', 'audios']
+// 트랙(장면) 영속 필드 부분 갱신 화이트리스트. 장면 = clips[](영상) + audios[](추가 오디오, 장면단위) + name(선택).
+const TRACK_PATCH_KEYS = ['clips', 'audios', 'name']
+
+// 장면 이름 정규화 — 문자열 트림 + 최대 40자. 빈 문자열이면 '' (이름 없음 = UI에서 "장면 N" 표시).
+const normalizeSceneName = (name) =>
+  typeof name === 'string' ? name.trim().slice(0, 40) : ''
 
 // 채널별 [{out,volume,muted,name,delay_ms}] 정규화. name=UI 라벨(선택), delay_ms=출력 채널 지연(ms).
 const normalizeChannels = (channels) =>
@@ -527,20 +534,30 @@ const editTrack = async (id, idx, patch) => {
       : { clips: playlist.tracks[idx].uuid ? [playlist.tracks[idx]] : [] }
     if ('clips' in patch) scene.clips = normalizeClips(patch.clips)
     if ('audios' in patch) scene.audios = normalizeAudios(patch.audios) // 장면 단위 추가 오디오
+    if ('name' in patch) {
+      const nm = normalizeSceneName(patch.name)
+      if (nm) scene.name = nm
+      else delete scene.name // 빈 이름 → 필드 제거 (기본 "장면 N" 표시로 복귀)
+    }
     playlist.tracks[idx] = scene
+    // 이름만 바뀐 편집(clips/audios 무변경)은 미디어 파이프라인을 건드릴 필요가 없다 —
+    // 재생 중인 장면 이름을 바꿔도 오디오 재동기화/풀 재프리로드로 재생이 튀지 않게 한다.
+    const mediaChanged = 'clips' in patch || 'audios' in patch
 
     const r = await dbPlaylists.update({ _id: id }, { $set: { tracks: playlist.tracks } })
 
     if (pStatus.playlistMode && pStatus.playlist?._id === id) {
       pStatus.playlist = { ...playlist, tracks: await getTrackWithFileInfo(playlist.tracks) }
-      ioClient.emit('pStatus', { playlist: pStatus.playlist })
-      // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영) + 채널 지연 라이브 적용
-      if (idx === pStatus.trackId) {
-        syncTrackAudios(pStatus.trackId, true)
-        applySceneChannelDelays(pStatus.playlist.tracks?.[idx])
+      ioClient.emit('pStatus', { playlist: pStatus.playlist }) // 이름 변경도 UI/풋터로 즉시 반영
+      if (mediaChanged) {
+        // 현재 장면의 오디오 스택 변경이면 재동기화 (추가/삭제 오디오 반영) + 채널 지연 라이브 적용
+        if (idx === pStatus.trackId) {
+          syncTrackAudios(pStatus.trackId, true)
+          applySceneChannelDelays(pStatus.playlist.tracks?.[idx])
+        }
+        // 편집 → 풀 재프리로드 (디바운스, 현재 열린 플레이리스트만)
+        triggerPreloadOnEdit(pStatus.playlist?.playlistId)
       }
-      // 편집 → 풀 재프리로드 (디바운스, 현재 열린 플레이리스트만)
-      triggerPreloadOnEdit(pStatus.playlist?.playlistId)
     }
     return r
   } catch (error) {
@@ -586,8 +603,8 @@ const applySceneChannelDelays = (scene) => {
       delays[out] = Math.max(delays[out] || 0, d)
     }
   }
-  for (const c of scene?.clips || []) put(c.embedded_streams?.[0]?.channels)
-  for (const a of scene?.audios || []) put(a.channels)
+  for (const c of scene?.clips || []) if (c) put(c.embedded_streams?.[0]?.channels)
+  for (const a of scene?.audios || []) if (a) put(a.channels)
   for (let i = 0; i < delays.length; i++) if (!Number.isFinite(delays[i])) delays[i] = 0
   playerSend({ command: 'set_channel_delays', delays })
 }
@@ -612,6 +629,40 @@ const windowClipSequence = (scenes, W) => {
     if (clip) seq.push({ sceneIdx, clip })
   })
   return seq
+}
+
+// ── 빈 장면 스킵 & 오디오 전용 장면 ──────────────────────────────────────────
+// 빈 장면 = 재생할 클립도 오디오도 없는 장면("장면 추가"로 만든 미채움 트랙). 재생 시 건너뛴다.
+const sceneAudios = (scene) => (Array.isArray(scene?.audios) ? scene.audios : [])
+const isEmptyScene = (scene) =>
+  sceneClips(scene).filter((c) => c && c.uuid).length === 0 &&
+  sceneAudios(scene).filter((a) => a && a.uuid).length === 0
+// from(포함)부터 끝까지 첫 번째 재생가능(비어있지 않은) 장면 인덱스. 없으면 -1 (랩 없음).
+const nextPlayableScene = (scenes, from) => {
+  for (let i = Math.max(0, from); i < (scenes?.length || 0); i++)
+    if (!isEmptyScene(scenes[i])) return i
+  return -1
+}
+// from에서 dir(+1/-1) 방향으로 인접한 재생가능 장면(랩 어라운드, 자기 제외). 없으면 -1.
+const stepPlayableScene = (scenes, from, dir) => {
+  const n = scenes?.length || 0
+  for (let k = 1; k <= n; k++) {
+    const idx = (((from + dir * k) % n) + n) % n
+    if (!isEmptyScene(scenes[idx])) return idx
+  }
+  return -1
+}
+// 오디오 전용 장면(영상 없음)의 유지 시간(ms) — 최장 오디오 길이. 루프 오디오가 있거나 길이를 못
+// 구하면 null(자동 넘김 없이 유지 — 수동 Next/정지까지). resolveImageTime과 같은 duration 소스.
+const audioOnlyHoldMs = (scene) => {
+  const audios = sceneAudios(scene).filter((a) => a && a.uuid)
+  if (!audios.length || audios.some((a) => a.loop)) return null
+  let maxSec = 0
+  for (const a of audios) {
+    const d = parseFloat(a?.metadata?.format?.duration)
+    if (Number.isFinite(d) && d > maxSec) maxSec = d
+  }
+  return maxSec > 0 ? Math.round(maxSec * 1000) : null
 }
 
 // 플레이어 전송용 슬림 file — 플레이어가 쓰는 필드만. 하이드레이션의 거대한 metadata/thumbnail
@@ -649,6 +700,16 @@ const fileForPlayer = (clip) => toPlayerFile(clip)
 // 장면 재생 상태 (모듈 로컬)
 let currentSceneIdx = 0
 let sceneEndedWins = new Set()
+
+// 오디오 전용 장면(영상 없음)의 다음 장면 전환 타이머 — 영상 end_reached가 없으므로 오디오 길이로
+// 넘긴다. 장면 전환/정지 시 반드시 정리(clearSceneAudioTimer)해 유령 전환을 막는다.
+let sceneAudioTimer = null
+const clearSceneAudioTimer = () => {
+  if (sceneAudioTimer) {
+    clearTimeout(sceneAudioTimer)
+    sceneAudioTimer = null
+  }
+}
 
 // 창별 프리롤 진척 캐시 (preload_status 피드백 누적) — windowId → {expected, prerolled}
 const preloadCache = {}
@@ -711,6 +772,8 @@ const triggerPreloadOnEdit = (playlistId) => {
 
 // 정지 시 장면 컨트롤러 상태 + 창 상태 초기화 (전 창 동시 정지 반영)
 const resetScenes = () => {
+  clearSceneAudioTimer() // 오디오 전용 장면 자동 전환 타이머 취소 (정지 후 유령 전환 방지)
+  clearAllWindowAudioTimers() // 윈도우 모드 오디오 전용 항목 타이머도 전부 취소
   currentSceneIdx = 0
   sceneEndedWins = new Set()
   pStatus.windowStates = {}
@@ -751,6 +814,20 @@ const playScene = (sceneIdx, startAt = null) => {
   const scenes = pStatus.playlist.tracks || []
   const scene = scenes[sceneIdx]
   if (!scene) return
+  clearSceneAudioTimer() // 이전 오디오 전용 장면 타이머 취소
+  // 안전망: 빈 장면이 요청되면(예: 편집으로 비워진 장면) 다음 재생가능 장면으로 건너뛴다.
+  // (일반 경로 startScenes/advanceScene은 이미 비어있지 않은 인덱스를 넘기지만, 직접 호출/레이스 대비.)
+  if (isEmptyScene(scene)) {
+    const nxt = nextPlayableScene(scenes, sceneIdx + 1)
+    if (nxt >= 0) return playScene(nxt, startAt)
+    logger.warn('playScene: no playable (non-empty) scene — stopping')
+    playerSend({ command: 'stop_all' })
+    stopAllTrackAudios()
+    pStatus.windowStates = {}
+    pStatus.trackId = 0
+    ioClient.emit('pStatus', { windowStates: {}, trackId: 0 })
+    return
+  }
   currentSceneIdx = sceneIdx
   sceneEndedWins = new Set()
 
@@ -823,6 +900,21 @@ const playScene = (sceneIdx, startAt = null) => {
   pStatus.file = clipsHere[0] || {}
   syncTrackAudios(sceneIdx, true)
   applySceneChannelDelays(scene) // 이 장면의 채널별 출력 지연 적용
+  // 오디오 전용 장면(영상 클립 없음): 영상 end_reached가 없으므로 오디오 길이만큼 재생 후 다음 장면
+  // 으로 넘긴다. slave는 master 멀티캐스트 트리거로만 전환하므로 자체 타이머를 걸지 않는다.
+  if (clipsHere.length === 0 && pStatus.sync?.role !== 'slave') {
+    const holdMs = audioOnlyHoldMs(scene)
+    if (holdMs != null) {
+      sceneAudioTimer = setTimeout(() => {
+        sceneAudioTimer = null
+        // 여전히 이 장면을 재생 중이고 플레이리스트 모드일 때만 전환 (정지/전환 레이스 방지)
+        if (pStatus.playlistMode && currentSceneIdx === sceneIdx) advanceScene()
+      }, holdMs)
+      logger.info(`Scene ${sceneIdx}: audio-only, auto-advance in ${holdMs}ms`)
+    } else {
+      logger.info(`Scene ${sceneIdx}: audio-only, holding (loop/unknown duration)`)
+    }
+  }
   ioClient.emit('pStatus', {
     playlist: pStatus.playlist,
     windowStates: pStatus.windowStates,
@@ -883,6 +975,15 @@ const preloadPlaylistOnly = async (playlistId) => {
 // 하지 않는다(그건 "로딩" 버튼 몫). 이미 로딩(프리로드)된 상태면 풀에서 즉시 승격돼 무지연.
 // (예전엔 재생 시 전 트랙 풀을 동시에 프리롤해 현재 클립 프리롤이 경쟁 → 시작이 수십 초 지연.)
 const startScenes = (sceneIdx, startAt = null) => {
+  // 시작 장면이 빈 트랙이면 다음 재생가능 장면부터 (앞이 다 비었으면 처음부터 탐색). 하나도 없으면 중단.
+  const allScenes = pStatus.playlist.tracks || []
+  let sIdx = nextPlayableScene(allScenes, sceneIdx)
+  if (sIdx < 0) sIdx = nextPlayableScene(allScenes, 0)
+  if (sIdx < 0) {
+    logger.warn('startScenes: no playable (non-empty) scene to start')
+    return
+  }
+  sceneIdx = sIdx
   // 프리롤 풀 시퀀스를 먼저 깐다(preload_playlist). 시퀀스가 없으면 플레이어의 FillPool이 no-op이라
   // (player_core: FillPool은 sequence 비어있으면 return) 장면 전환 시 다음 덱을 스탠바이에서
   // 재빌드 → 영상이 튀고(hitch) play_synced 배리어가 즉시 못 터져 창들이 제각각 스왑(동시성 깨짐).
@@ -913,17 +1014,22 @@ const advanceScene = (startAt = null) => {
     triggerOrPlayScene(currentSceneIdx, startAt)
     return
   }
-  let next = currentSceneIdx + 1
-  if (next >= scenes.length) {
+  const stopAll = () => {
+    playerSend({ command: 'stop_all' })
+    stopAllTrackAudios()
+    pStatus.windowStates = {}
+    pStatus.trackId = 0
+    ioClient.emit('pStatus', { windowStates: pStatus.windowStates, trackId: 0 })
+  }
+  // 현재 장면 이후의 첫 재생가능(비어있지 않은) 장면으로 — 빈 트랙은 건너뛴다.
+  let next = nextPlayableScene(scenes, currentSceneIdx + 1)
+  if (next < 0) {
+    // 끝까지 재생가능 장면이 없음 → repeat=all이면 처음부터 다시 탐색, 아니면 정지.
     if (repeat === 'all') {
-      next = 0
+      next = nextPlayableScene(scenes, 0)
+      if (next < 0) return stopAll() // 재생가능 장면이 하나도 없음
     } else {
-      playerSend({ command: 'stop_all' })
-      stopAllTrackAudios()
-      pStatus.windowStates = {}
-      pStatus.trackId = 0
-      ioClient.emit('pStatus', { windowStates: pStatus.windowStates, trackId: 0 })
-      return
+      return stopAll()
     }
   }
   triggerOrPlayScene(next, startAt)
@@ -975,12 +1081,56 @@ const onSceneWindowEnd = (data) => {
 // 순서를 유지해 시퀀스를 뽑는다(장면 모드의 다클립 장면도 안전하게 처리).
 // ---------------------------------------------------------------------------
 
+// 윈도우 항목의 소속 창. 영상 항목은 클립의 window, 오디오 전용 항목(클립 없음)은 항목의 window 필드.
+const itemWindow = (sc) => {
+  const clip = sceneClips(sc).find((c) => c && c.uuid)
+  if (clip && Number.isInteger(clip.window)) return clip.window
+  return Number.isInteger(sc?.window) ? sc.window : 0
+}
+// 오디오 전용 항목 표시용 라벨 (첫 오디오 파일명)
+const audioOnlyLabel = (audios) => {
+  const a = (audios || []).find((x) => x && x.filename)
+  return a ? a.filename : '(오디오)'
+}
+
+// 창별 오디오 전용 항목 자동 전환 타이머 (영상 end_reached가 없어 오디오 길이로 넘긴다). W → timeout.
+const windowAudioTimers = {}
+const clearWindowAudioTimer = (W) => {
+  if (windowAudioTimers[W]) {
+    clearTimeout(windowAudioTimers[W])
+    delete windowAudioTimers[W]
+  }
+}
+const clearAllWindowAudioTimers = () => {
+  for (const W of Object.keys(windowAudioTimers)) clearWindowAudioTimer(W)
+}
+
+// 재생할 내용이 있는 창 집합 — 영상 클립이 있는 창(windowsInScenes) + 오디오 전용 항목이 속한 창.
+// (오디오 전용만 있는 레인도 재생 대상에 포함시키기 위함.)
+const windowsWithContent = (scenes) => {
+  const s = new Set(windowsInScenes(scenes))
+  for (const sc of scenes || []) {
+    if (!sceneClips(sc).length && sceneAudios(sc).some((a) => a && a.uuid)) s.add(itemWindow(sc))
+  }
+  return [...s]
+}
+
 // 창 W의 항목 시퀀스 [{ seqIdx, clip, audios }] — 창별 독립 재생 목록.
+// 영상 항목(clip 있음)과 오디오 전용 항목(clip=null, audios만)을 순서대로 포함한다.
 const windowItemSequence = (scenes, W) => {
   const seq = []
   ;(scenes || []).forEach((sc) => {
     const clip = sceneClips(sc).find((c) => clipWin(c) === W)
-    if (clip) seq.push({ clip, audios: Array.isArray(sc.audios) ? sc.audios : [] })
+    if (clip) {
+      seq.push({ clip, audios: Array.isArray(sc.audios) ? sc.audios : [] })
+    } else if (
+      !sceneClips(sc).length &&
+      itemWindow(sc) === W &&
+      sceneAudios(sc).some((a) => a && a.uuid)
+    ) {
+      // 오디오 전용 항목: 이 창 소속이고 재생할 오디오가 있으면 시퀀스에 포함 (영상 없음)
+      seq.push({ clip: null, audios: sceneAudios(sc) })
+    }
   })
   return seq.map((e, seqIdx) => ({ ...e, seqIdx }))
 }
@@ -994,7 +1144,7 @@ const applyWindowChannelDelays = () => {
     const seq = windowItemSequence(scenes, Number(W))
     const item = seq[st.seqIndex]
     if (!item) continue
-    clips.push(item.clip)
+    if (item.clip) clips.push(item.clip) // 오디오 전용 항목은 클립 없음(null 제외)
     for (const a of item.audios || []) audios.push(a)
   }
   applySceneChannelDelays({ clips, audios })
@@ -1006,38 +1156,86 @@ const applyWindowChannelDelays = () => {
 // 오디오 믹서(amix)에 물린 풀 덱을 해체하면서 새 덱을 빌드하다 레이스로 플레이어가 크래시
 // (0xC0000005)했다. 시퀀스는 이미 설정돼 있으므로 play_current_and_load_next만으로 풀에서 승격된다.
 const playWindowItem = (W, seq, start, preload = true) => {
-  const files = seq.map((e) => fileForPlayer(e.clip))
-  if (preload) {
-    playerSend({ command: 'preload_playlist', window_id: W, current_index: start, tracks: files })
+  const entry = seq[start]
+  if (!entry) return
+  clearWindowAudioTimer(W) // 이전 오디오 전용 타이머 취소
+  const prev = pStatus.windowStates[W]
+
+  // 오디오 전용 항목 — 영상 없음: 창은 정지(배경) + 오디오만 재생 + 길이 타이머로 다음 항목 전환.
+  if (!entry.clip) {
+    playerSend({ command: 'stop', window_id: W }) // 이 창 영상 정지(배경색). 풀도 해제됨.
+    if (prev) stopAudios(prev.audioIds)
+    const audioIds = startAudios(entry.audios)
+    pStatus.windowStates[W] = {
+      seqIndex: start,
+      trackId: start,
+      uuid: null,
+      filename: audioOnlyLabel(entry.audios),
+      audioOnly: true,
+      activePlayerId: 0,
+      audioIds,
+      player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
+    }
+    scheduleWindowAudioAdvance(W, entry, start)
+    return
   }
+
+  // 영상 항목 — 풀에는 "영상 파일만" 등록(오디오 전용 항목은 제외해 null 프리롤 방지). 진행은 항상
+  // 호스트가 명시(next 명령은 영상→영상에서만) → 풀/시퀀스 인덱스 어긋남 없이 안전.
+  const files = seq.map((e) => (e.clip ? fileForPlayer(e.clip) : null))
+  if (preload) {
+    const poolFiles = files.filter(Boolean)
+    let curIdx = poolFiles.findIndex((f) => f.path === files[start].path)
+    if (curIdx < 0) curIdx = 0
+    playerSend({ command: 'preload_playlist', window_id: W, current_index: curIdx, tracks: poolFiles })
+  }
+  const nextFile = files[start + 1] || null // 다음이 오디오 전용/끝이면 null (영상 프리로드 없음)
   playerSend({
     command: 'play_current_and_load_next',
     window_id: W,
     track_idx: start,
     current: files[start],
-    next: files[start + 1] || null,
-    current_time: resolveImageTime(seq[start].clip),
-    next_time: files[start + 1] ? resolveImageTime(seq[start + 1].clip) : undefined,
+    next: nextFile,
+    current_time: resolveImageTime(entry.clip),
+    next_time: nextFile ? resolveImageTime(seq[start + 1].clip) : undefined,
   })
-  const prev = pStatus.windowStates[W]
   if (prev) stopAudios(prev.audioIds)
-  const audioIds = startAudios(seq[start].audios)
+  const audioIds = startAudios(entry.audios)
   pStatus.windowStates[W] = {
     seqIndex: start,
     trackId: start,
-    uuid: seq[start].clip.uuid,
-    filename: seq[start].clip.filename,
+    uuid: entry.clip.uuid,
+    filename: entry.clip.filename,
     activePlayerId: 0,
     audioIds,
     player: { time: 0, duration: 0, position: 0, is_playing: true, event: 'playing' },
   }
 }
 
+// 오디오 전용 창 항목의 다음 항목 자동 전환 예약 (오디오 최장 길이 후). slave는 master 트리거만 따름.
+const scheduleWindowAudioAdvance = (W, entry, seqIdx) => {
+  if (pStatus.sync?.role === 'slave') return
+  const holdMs = audioOnlyHoldMs({ audios: entry.audios })
+  if (holdMs == null) {
+    logger.info(`Window ${W} seq ${seqIdx}: audio-only, holding (loop/unknown duration)`)
+    return
+  }
+  windowAudioTimers[W] = setTimeout(() => {
+    delete windowAudioTimers[W]
+    const st = pStatus.windowStates[W]
+    // 여전히 이 창의 이 오디오 전용 항목을 재생 중일 때만 전환 (정지/전환 레이스 방지)
+    if (pStatus.playlistMode && st && st.audioOnly && st.seqIndex === seqIdx) {
+      advanceWindowFromEnd(W, seqIdx)
+    }
+  }, holdMs)
+  logger.info(`Window ${W} seq ${seqIdx}: audio-only, auto-advance in ${holdMs}ms`)
+}
+
 // 윈도우 모드 재생 시작 — 설정된 전 창을 각자 첫 항목부터 동시에 (그러나 독립적으로) 시작.
 const startWindowPlaylist = () => {
   const scenes = pStatus.playlist.tracks || []
   const known = configuredWindowIds()
-  const windowIds = windowsInScenes(scenes).filter((w) => known.has(w))
+  const windowIds = windowsWithContent(scenes).filter((w) => known.has(w))
   const lookahead = Number.isInteger(pStatus.preloadLookahead) ? pStatus.preloadLookahead : 2
   const maxDecks = Number.isInteger(pStatus.preloadMaxDecks) ? pStatus.preloadMaxDecks : 8
   playerSend({ command: 'set_preload_config', lookahead, max_decks: maxDecks })
@@ -1072,65 +1270,69 @@ const advanceWindowOnEnd = (data) => {
   if (!configuredWindowIds().has(W)) return
   // 활성(재생 중) 창만 전진 — 전역/창별 정지로 windowStates[W]가 지워졌으면 뒤늦게 도착한
   // end_reached는 무시(정지 후 repeat=all이 재생을 되살리는 레이스 방지).
-  if (!pStatus.windowStates[W]) return
+  const st = pStatus.windowStates[W]
+  if (!st) return
+  // 오디오 전용 항목 재생 중이면 영상 end_reached(지난 덱의 지연 이벤트)는 무시 — 전환은 타이머가 담당.
+  if (st.audioOnly) return
+  const endedSeq =
+    typeof data.playlist_track_index === 'number' ? data.playlist_track_index : st.seqIndex ?? 0
+  advanceWindowFromEnd(W, endedSeq)
+}
+
+// 창 W의 항목 종료(영상 end_reached 또는 오디오 전용 타이머) → 다음 항목으로. endedSeq=끝난 항목.
+// 영상→영상은 기존의 부드러운 next(프리로드 standby 승격)를 유지하고, 오디오 전용이 관여하는 전환만
+// 명시 재생(playWindowItem)으로 처리한다. slave는 master 멀티캐스트 트리거로만 전환.
+const advanceWindowFromEnd = (W, endedSeq) => {
+  if (pStatus.sync?.role === 'slave') return
   const scenes = pStatus.playlist?.tracks || []
   const seq = windowItemSequence(scenes, W)
   if (!seq.length) return
-  const st = pStatus.windowStates[W]
-  const endedSeq =
-    typeof data.playlist_track_index === 'number'
-      ? data.playlist_track_index
-      : st?.seqIndex ?? 0
   const repeat = pStatus.repeat
   const isLast = endedSeq >= seq.length - 1
-  const files = seq.map((e) => fileForPlayer(e.clip))
+  const curWasVideo = !!seq[endedSeq]?.clip
+  // 오디오 전용 직후(정지로 풀 해제) 영상 재생이면 풀을 재빌드해야 한다(preload=true).
+  const playExplicit = (idx) => {
+    const wasAudioOnly = pStatus.windowStates[W]?.audioOnly === true
+    playWindowItem(W, seq, idx, wasAudioOnly && !!seq[idx].clip)
+  }
 
   if (repeat === 'repeat_one') {
-    playerSend({ command: 'stop', window_id: W })
-    playerSend({
-      command: 'play_current_and_load_next',
-      window_id: W,
-      track_idx: endedSeq,
-      current: files[endedSeq],
-      next: files[endedSeq + 1] || null,
-      current_time: resolveImageTime(seq[endedSeq].clip),
-      next_time: files[endedSeq + 1] ? resolveImageTime(seq[endedSeq + 1].clip) : undefined,
-    })
-    updateWindowAfterAdvance(W, seq, endedSeq)
+    if (curWasVideo) playerSend({ command: 'stop', window_id: W })
+    playExplicit(endedSeq)
   } else if (!isLast) {
-    playerSend({ command: 'next', window_id: W })
-    updateWindowAfterAdvance(W, seq, endedSeq + 1)
+    const nextEntry = seq[endedSeq + 1]
+    if (curWasVideo && nextEntry.clip) {
+      playerSend({ command: 'next', window_id: W }) // 영상→영상: 프리로드 standby 덱 승격(무지연)
+      updateWindowAfterAdvance(W, seq, endedSeq + 1)
+    } else {
+      playExplicit(endedSeq + 1) // 오디오 전용이 관여 → 명시 재생
+    }
   } else if (repeat === 'all') {
-    playerSend({
-      command: 'play_current_and_load_next',
-      window_id: W,
-      track_idx: 0,
-      current: files[0],
-      next: files[1] || null,
-      current_time: resolveImageTime(seq[0].clip),
-      next_time: files[1] ? resolveImageTime(seq[1].clip) : undefined,
-    })
-    updateWindowAfterAdvance(W, seq, 0)
+    playExplicit(0)
   } else {
     // none → 이 창만 정지 (마지막 프레임 유지). 다른 창은 계속.
     playerSend({ command: 'stop', window_id: W })
+    clearWindowAudioTimer(W)
+    const st = pStatus.windowStates[W]
     if (st) stopAudios(st.audioIds)
     delete pStatus.windowStates[W]
-    applyWindowChannelDelays()
-    ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
   }
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
 }
 
-// advance 후 windowStates[W] 갱신 + 항목 오디오 전환 (이전 정지·새 기동)
+// advance 후 windowStates[W] 갱신 + 항목 오디오 전환 (이전 정지·새 기동). 영상→영상 next 경로 전용.
 const updateWindowAfterAdvance = (W, seq, newSeqIdx) => {
   const idx = Math.min(Math.max(0, newSeqIdx), seq.length - 1)
+  clearWindowAudioTimer(W)
   const st = pStatus.windowStates[W] || { activePlayerId: 0, audioIds: [], player: {} }
   stopAudios(st.audioIds)
   st.audioIds = startAudios(seq[idx].audios)
   st.seqIndex = idx
   st.trackId = idx
-  st.uuid = seq[idx].clip.uuid
-  st.filename = seq[idx].clip.filename
+  st.uuid = seq[idx].clip?.uuid ?? null
+  st.filename = seq[idx].clip?.filename ?? audioOnlyLabel(seq[idx].audios)
+  st.audioOnly = !seq[idx].clip
   pStatus.windowStates[W] = st
   applyWindowChannelDelays()
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
@@ -1183,6 +1385,7 @@ const playWindowInPlaylist = async (playlistId, windowId, index = 0) => {
 // stop_all/resetScenes 호출 금지 (다른 창까지 죽는다).
 const stopWindow = (windowId) => {
   const W = Number(windowId)
+  clearWindowAudioTimer(W) // 오디오 전용 자동 전환 타이머 취소 (정지 후 유령 전환 방지)
   playerSend({ command: 'stop', window_id: W })
   const st = pStatus.windowStates[W]
   if (st) stopAudios(st.audioIds)
@@ -1199,14 +1402,19 @@ const stopWindow = (windowId) => {
 // 장면 객체를 파일로 전송 → 씬/윈도우 모드에서 동작 안 함. 여기 컨트롤러로 위임한다.)
 // ---------------------------------------------------------------------------
 
-// 씬 모드: 전 창을 인접 장면으로 (락스텝). delta 0 = 현재 장면 재시작.
+// 씬 모드: 전 창을 인접 장면으로 (락스텝). delta 0 = 현재 장면 재시작. 빈 트랙은 건너뛴다.
 const stepScene = (delta) => {
   const scenes = pStatus.playlist?.tracks || []
   if (!scenes.length) return null
   const base = Number.isInteger(currentSceneIdx) ? currentSceneIdx : Number(pStatus.trackId) || 0
-  let idx = base + delta
-  if (idx >= scenes.length) idx = 0
-  else if (idx < 0) idx = scenes.length - 1
+  let idx
+  if (delta === 0) {
+    // 현재 재시작 — 현재가 빈 장면이면(레이스) 다음 재생가능 장면으로.
+    idx = isEmptyScene(scenes[base]) ? stepPlayableScene(scenes, base, 1) : base
+  } else {
+    idx = stepPlayableScene(scenes, base, delta > 0 ? 1 : -1)
+  }
+  if (idx == null || idx < 0) return null // 재생가능 장면 없음
   playScene(idx)
   logger.info(`Manual step scene → ${idx}`)
   return idx
@@ -1311,13 +1519,19 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       return `Playing playlist ${playlistId} (scenes) from scene ${trackIdx}`
     }
 
-    // 폴백(구버전 플레이어 — multi_window 미지원): 장면의 첫 클립만 주 창에서 재생
-    const scene0 = tracks[Number(trackIdx)]
-    const currentTrack = sceneClips(scene0)[0]
-    const nextTrack = sceneClips(tracks[Number(trackIdx) + 1])[0] || null
+    // 폴백(구버전 플레이어 — multi_window 미지원): 장면의 첫 클립만 주 창에서 재생.
+    // 클립 없는 장면(빈 트랙/오디오 전용)은 이 폴백에선 재생할 수 없으므로 건너뛴다.
+    const hasClip = (sc) => sceneClips(sc).some((c) => c && c.uuid)
+    let tIdx = Number(trackIdx)
+    while (tIdx < tracks.length && !hasClip(tracks[tIdx])) tIdx++
+    const scene0 = tracks[tIdx]
+    const currentTrack = sceneClips(scene0 || {})[0]
+    let nIdx = tIdx + 1
+    while (nIdx < tracks.length && !hasClip(tracks[nIdx])) nIdx++
+    const nextTrack = sceneClips(tracks[nIdx] || {})[0] || null
 
     if (!currentTrack) {
-      logger.error('Current scene has no clip')
+      logger.error('No playable clip in playlist (legacy fallback)')
       return null
     }
 
@@ -1337,7 +1551,7 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       command: 'play_current_and_load_next',
       current: currentTrack,
       next: nextTrack,
-      track_idx: Number(trackIdx),
+      track_idx: tIdx,
       current_time: currentTime,
       next_time: nextTime,
     })
@@ -1365,14 +1579,13 @@ const playNextTrack = async () => {
       return null
     }
 
-    // 다음 트랙 인덱스 계산
-    let nextIdx = pStatus.trackId + 1
-    if (nextIdx >= tracks.length) {
-      // repeat 모드에 따라 처리
-      if (pStatus.repeat === 'all') {
-        nextIdx = 0 // 처음부터 다시
-      } else {
-        logger.info('Playlist ended')
+    // 다음 재생가능(비어있지 않은) 트랙 인덱스 계산 — 빈 트랙은 건너뛴다.
+    let nextIdx = nextPlayableScene(tracks, pStatus.trackId + 1)
+    if (nextIdx < 0) {
+      // 끝까지 없음 → repeat=all이면 처음부터 다시 탐색, 아니면 종료.
+      if (pStatus.repeat === 'all') nextIdx = nextPlayableScene(tracks, 0)
+      if (nextIdx < 0) {
+        logger.info('Playlist ended (no playable track)')
         return null
       }
     }
