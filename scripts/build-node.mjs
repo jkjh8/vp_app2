@@ -4,9 +4,11 @@
 //   node.exe          stock Node 런타임 (현재 실행 중인 node 복사)
 //   server.cjs        전 의존성 번들 (esbuild)
 //   public/spa/       vp_ui 빌드 결과 (기존 위치에서 복사)
-//   player/           vp_player 네이티브 번들 (vplayer.exe + gst)
-//   ffmpeg/           ffmpeg.exe, ffprobe.exe (Phase 2.5에서 제거 예정)
+//   player/           vp_player 네이티브 번들 (vplayer.exe + gst + licenses/)
+//   THIRD-PARTY-NOTICES.md      서드파티 고지 (LGPL 소스 오퍼 포함)
+//   THIRD-PARTY-LICENSES/       npm 라이센스 전문 (백엔드/웹UI)
 //   start.cmd         개발/수동 실행용 (VP_APP_ROOT 설정 후 node server.cjs)
+//   (Phase 2.5부터 ffmpeg.exe/ffprobe.exe 미포함 — 메타/썸네일은 네이티브 플레이어가 담당)
 //
 // 사용법: node scripts/build-node.mjs
 
@@ -15,6 +17,7 @@ import { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, statSync } from '
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { collectNpmLicenses } from './collect-licenses.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'dist-node')
@@ -62,6 +65,34 @@ if (existsSync(playerSrc)) {
 }
 
 // (Phase 2.5: ffmpeg-static/ffprobe-static 제거 — 메타/썸네일은 네이티브 플레이어가 담당)
+
+// --- 6. 서드파티 라이센스 (LGPL 준수: NOTICE + npm 라이센스 전문) ---------------
+// 마스터 고지 파일 (수기 작성, LGPL 소스 제공 오퍼 포함)
+const noticeSrc = path.join(root, 'THIRD-PARTY-NOTICES.md')
+if (existsSync(noticeSrc)) {
+  cpSync(noticeSrc, path.join(out, 'THIRD-PARTY-NOTICES.md'))
+} else {
+  console.warn('WARN: THIRD-PARTY-NOTICES.md 없음 — 배포 전 반드시 포함할 것 (LGPL 고지)')
+}
+// 네이티브 플레이어(GStreamer/FFmpeg 등) 라이센스는 player/licenses/ 에 bundle.ps1이 이미 복사.
+const playerLic = path.join(out, 'player', 'licenses')
+if (!existsSync(playerLic)) {
+  console.warn('WARN: player/licenses/ 없음 — vp_player bundle.ps1 재실행 필요 (LGPL 원문 누락)')
+}
+// npm 라이센스 전문 수집 (백엔드 + 웹UI)
+const licDir = path.join(out, 'THIRD-PARTY-LICENSES')
+mkdirSync(licDir, { recursive: true })
+const backend = collectNpmLicenses(root, 'vp_app2 (Node 백엔드)')
+writeFileSync(path.join(licDir, 'npm-backend.txt'), backend.text)
+console.log(`  THIRD-PARTY-LICENSES/npm-backend.txt: ${backend.count} packages`)
+const uiRoot = path.join(root, '..', 'vp_ui')
+if (existsSync(path.join(uiRoot, 'node_modules'))) {
+  const webui = collectNpmLicenses(uiRoot, 'vp_ui (웹 UI — SPA 정적 산출물에 포함)')
+  writeFileSync(path.join(licDir, 'npm-webui.txt'), webui.text)
+  console.log(`  THIRD-PARTY-LICENSES/npm-webui.txt: ${webui.count} packages`)
+} else {
+  console.warn('WARN: vp_ui/node_modules 없음 — 웹UI npm 라이센스 미수집')
+}
 
 // --- 7. 수동 실행 스크립트 -----------------------------------------------------
 writeFileSync(

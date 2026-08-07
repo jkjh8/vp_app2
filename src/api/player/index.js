@@ -348,7 +348,7 @@ const setAudioDevice = async (deviceId) => {
 // 하드웨어 가속 설정 ('auto'|'on'|'off'). 기동 시에만 반영되는 엔진 설정이므로 저장 후
 // 플레이어를 재시작해 적용한다 (재생이 잠시 중단됨 — UI가 확인 후 호출).
 const setHardwareAcceleration = async (value) => {
-  if (!['auto', 'on', 'off'].includes(value)) {
+  if (!['auto', 'on', 'off', 'hwonly'].includes(value)) {
     logger.warn(`Invalid hardwareAcceleration value: ${value}`)
     return 'invalid value'
   }

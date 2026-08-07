@@ -481,8 +481,35 @@ const parsePlayerStatus = async (data) => {
         pStatus.hardwareAccelEffective =
           msgData?.render === 'software' && msgData?.decode === 'software' ? 'software' : 'hardware'
         ioClient.emit('pStatus', { hardwareAccelEffective: pStatus.hardwareAccelEffective })
+        pStatus.hardwareAccelMode = msgData?.mode || null // 'hw_only'|'on'|'off'
+        ioClient.emit('pStatus', { hardwareAccelMode: pStatus.hardwareAccelMode })
         logger.info(`Hardware acceleration: ${JSON.stringify(msgData)}`)
         break
+
+      // 재생 실패(v3): HW 전용 모드에서 GPU 미지원 코덱, 파일 열기 실패 등. 창별 path+reason을
+      // pStatus.lastPlaybackError(지속 배지)에 저장 + 'playbackError' 이벤트(UI 토스트)로 발신.
+      case 'playback_error': {
+        const reasonText = {
+          codec_unsupported: '코덱 미지원 (하드웨어 디코더 없음)',
+          file_error: '파일을 열 수 없음',
+          preroll_failed: '재생 준비 실패',
+          preroll_timeout: '재생 준비 시간 초과',
+        }
+        const payload = {
+          windowId: typeof msgData?.window_id === 'number' ? msgData.window_id : null,
+          path: msgData?.path || '',
+          reason: msgData?.reason || 'preroll_failed',
+          message: reasonText[msgData?.reason] || '재생 실패',
+          at: Date.now(),
+        }
+        pStatus.lastPlaybackError = payload
+        ioClient.emit('pStatus', { lastPlaybackError: payload })
+        ioClient.emit('playbackError', payload)
+        logger.error(
+          `[Player] playback_error: ${payload.reason} "${payload.path}" (win ${payload.windowId})`,
+        )
+        break
+      }
 
       // 프리로드 상태(v3): 창별 풀 프리롤 진척 — UI "로딩됨/로딩중" 배지용.
       case 'preload_status': {

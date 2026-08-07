@@ -39,13 +39,15 @@ Name: "autostart"; Description: "Windows 시작 시 자동 실행 (작업 스케
 Name: "firewall"; Description: "방화벽에서 제어 포트 허용 (3000, 15000, 15001)"
 
 [Files]
-; dist-node 전체 (node.exe, server.cjs, public\, player\, ffmpeg\, start.cmd)
+; dist-node 전체 (node.exe, server.cjs, public\, player\, start.cmd,
+;  THIRD-PARTY-NOTICES.md, THIRD-PARTY-LICENSES\, player\licenses\ — LGPL 고지 포함)
 Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 콘솔 숨김 실행용 런처 (아래 Code 섹션에서 생성하는 VBS 대신 하드 링크)
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\vpapp-launch.vbs"; IconFilename: "{app}\public\icons\icon.ico"
 Name: "{group}\{#AppName} 제거"; Filename: "{uninstallexe}"
+Name: "{group}\라이센스 고지 (Third-Party Licenses)"; Filename: "{app}\THIRD-PARTY-NOTICES.md"
 Name: "{commondesktop}\{#AppName}"; Filename: "{app}\vpapp-launch.vbs"; IconFilename: "{app}\public\icons\icon.ico"
 
 [Run]

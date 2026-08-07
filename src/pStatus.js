@@ -21,9 +21,13 @@ let pStatus = {
   startOnPlaylistId: null,
   audioDevices: [],
   audioDevice: '',
-  // 하드웨어 가속: 'auto' | 'on' | 'off' (기동 시 VP_HWACCEL env로 플레이어에 전달, 변경 시 재시작).
+  // 하드웨어 가속: 'auto' | 'on' | 'off' | 'hwonly' (기동 시 VP_HWACCEL env로 전달, 변경 시 재시작).
+  //  hwonly = GPU 디코더 전용(소프트웨어 폴백 없음) — 코덱 특허 SW 디코드 회피용.
   hardwareAcceleration: 'auto',
   hardwareAccelEffective: null, // 'hardware' | 'software' (플레이어 hwaccel_status 실효값)
+  hardwareAccelMode: null, // 'hw_only' | 'on' | 'off' (플레이어 실효 모드)
+  // 최근 재생 실패 (HW 전용 코덱 미지원/파일 오류 등) — UI 배지/토스트용. {windowId,path,reason,message,at}
+  lastPlaybackError: null,
   // 전역 오디오 마스터 볼륨 (0~100) — 플레이어 출력 버스에 적용.
   masterVolume: 100,
   // 출력 채널별 오디오 지연(ms) — 스피커 동기 보정 (믹서 출력에 적용, 임베디드+오디오트랙 공통)

@@ -96,8 +96,9 @@ const startPlayer = () => {
       ...process.env,
       ...(extraPath ? { PATH: `${extraPath};${process.env.PATH}` } : {}),
       APP_PATH: appPath,
-      // 하드웨어 가속: 'off'만 소프트웨어 강제(=0), 'auto'/'on'은 HW(=1, 플레이어가 프로브).
-      VP_HWACCEL: pStatus.hardwareAcceleration === 'off' ? '0' : '1',
+      // 하드웨어 가속은 무조건 우선 — 지원 시 GPU(d3d11), 미지원 시 자동 소프트웨어 폴백.
+      // 사용자 토글 없음(설정엔 지원 여부만 표시). 플레이어가 d3d11 프로브로 실효값 보고.
+      VP_HWACCEL: '1',
     },
   })
 
