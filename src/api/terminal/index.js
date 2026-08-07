@@ -1,84 +1,13 @@
-import pStatus from '../../pStatus.js'
+// 외부제어 TCP 명령 dispatcher (재설계 v2).
+// 입력(JSON 또는 simple `cmd,v1,v2`)을 정규화 → 레지스트리(commands.js) 조회 → 파라미터 매핑
+// → 핸들러 실행 → 표준 TcpResponse 반환. tcp/index.js가 이 응답을 그대로 클라이언트에 전송한다.
+// (예전의 하드코딩 queryCommands 응답 게이팅 제거 — 모든 명령이 응답한다.)
 import { logger } from '../../logger/index.js'
-import {
-  play,
-  stop,
-  playId,
-  setNext,
-  setPrevious,
-  playFoundFile,
-  setAudioDevice,
-  updateTime,
-  pause,
-  setFullscreen,
-  setRepeat,
-} from '../player/index.js'
-import { playlistPlay, getPlaylists, getPlaylist } from '../playlists/index.js'
-import db, { dbFiles, dbPlaylists, dbStatus } from '../../db/index.js'
+import { TcpResponse } from '../../utils/tcpResponse.js'
+import { commandLookup } from './commands.js'
 
-// 파일 정보 간소화 함수 (ID와 이름만)
-const simplifyFileInfo = (file) => {
-  if (!file) return null
-  return {
-    id: file.id,
-    name: file.name,
-    type: file.type,
-  }
-}
-
-// 플레이리스트 트랙 정보 간소화 함수
-const simplifyTrackInfo = (track, index) => {
-  if (!track) return null
-  return {
-    trackId: index,
-    uuid: track.uuid,
-    amx: track.amx,
-    filename: track.filename || track.originalname,
-    time: track.time || 0,
-    mimetype: track.mimetype,
-    duration: track.metadata?.format?.duration,
-    size: track.size,
-    is_image: track.is_image || false,
-  }
-}
-
-// 플레이리스트 정보 간소화 함수
-const simplifyPlaylistInfo = (playlist) => {
-  if (!playlist) return null
-  return {
-    playlistId: playlist.playlistId,
-    name: playlist.name,
-    description: playlist.description,
-    tracks:
-      playlist.tracks?.map((track, index) => simplifyTrackInfo(track, index)) ||
-      [],
-    createdAt: playlist.createdAt,
-    updatedAt: playlist.updatedAt,
-  }
-}
-
-const parseSimpleCommand = (data) => {
-  // 간단한 command,value 형태 파싱
-  const parts = data.trim().split(',')
-  if (parts.length >= 1) {
-    return {
-      command: parts[0].trim(),
-      value: parts.length > 1 ? parts[1].trim() : null,
-    }
-  }
-  return null
-}
-
-// helper to parse integers when possible
-const parseIntOrValue = (v) => {
-  if (v === null || v === undefined) return v
-  const n = parseInt(v)
-  return Number.isNaN(n) ? v : n
-}
-
-// helper to parse boolean-like strings
+// ── 파라미터 코어션 ─────────────────────────────────────────
 const parseBool = (v) => {
-  if (v === null || v === undefined) return undefined
   if (typeof v === 'boolean') return v
   const s = String(v).trim().toLowerCase()
   if (['1', 'true', 'yes', 'on'].includes(s)) return true
@@ -86,394 +15,138 @@ const parseBool = (v) => {
   return undefined
 }
 
-// normalize message from either JSON or simple command format
+const coerce = (type, v) => {
+  if (v === undefined || v === null || v === '') return undefined
+  switch (type) {
+    case 'number': {
+      const n = Number(v)
+      return Number.isNaN(n) ? undefined : n
+    }
+    case 'boolean':
+      return parseBool(v)
+    case 'string':
+      return String(v)
+    case 'raw':
+    default:
+      return v
+  }
+}
+
+// simple 포트: 위치(순서)로 매핑. 'number[]'는 남은 값 전부.
+const mapPositional = (params, values) => {
+  const out = {}
+  let vi = 0
+  for (const p of params) {
+    if (p.type === 'number[]') {
+      out[p.name] = values.slice(vi).map(Number).filter((n) => !Number.isNaN(n))
+      vi = values.length
+      continue
+    }
+    const c = coerce(p.type, values[vi])
+    vi += 1
+    if (c !== undefined) out[p.name] = c
+  }
+  return out
+}
+
+// JSON 포트: 이름으로 매핑 (레거시 필드명은 jsonAliases로 흡수).
+const mapNamed = (params, obj) => {
+  const out = {}
+  for (const p of params) {
+    let raw = obj[p.name]
+    if (raw === undefined && p.jsonAliases) {
+      for (const a of p.jsonAliases) {
+        if (obj[a] !== undefined) {
+          raw = obj[a]
+          break
+        }
+      }
+    }
+    if (p.type === 'number[]') {
+      if (Array.isArray(raw)) out[p.name] = raw.map(Number).filter((n) => !Number.isNaN(n))
+      continue
+    }
+    const c = coerce(p.type, raw)
+    if (c !== undefined) out[p.name] = c
+  }
+  return out
+}
+
+// 입력 문자열 → { commandName, params } (JSON/simple 공용). 실패 시 null.
 const normalizeMessage = (data) => {
-  try {
-    const msg = JSON.parse(data)
-    if (!msg || !msg.command) throw new Error('Invalid JSON')
-    // normalize command name for consistent handling
-    msg.command = String(msg.command).toLowerCase()
-    if (msg.command === 'repeat') msg.command = 'setrepeat'
-    // if JSON fullscreen provided, normalize value to boolean when possible
-    if (msg.command === 'fullscreen' && typeof msg.value !== 'undefined') {
-      msg.fullscreen = parseBool(msg.value)
+  const trimmed = String(data).trim()
+  // JSON 우선 시도
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let obj
+    try {
+      obj = JSON.parse(trimmed)
+    } catch {
+      return { error: { code: 'INVALID_JSON', message: 'Invalid JSON format' } }
     }
-    msg._isJson = true
-    return msg
-  } catch (e) {
-    // not JSON -> try simple parser
-    const msg = parseSimpleCommand(data)
-    if (!msg || !msg.command) return null
-
-    // normalize aliases
-    const low = msg.command.toLowerCase()
-    // normalize command name to lowercase for consistent handling
-    msg.command = low
-    // map common aliases
-    if (low === 'setfullscreen' || low === 'full') msg.command = 'fullscreen'
-    if (low === 'setrepeat' || low === 'set_repeat' || low === 'repeat')
-      msg.command = 'setrepeat'
-    if (low === 'get_repeat' || low === 'getrepeat') msg.command = 'getrepeat'
-
-    // map simple value into appropriate properties without side effects
-    // note: msg.value may be null if no second part provided
-    // special-case repeat mapping from simple value
-    if (msg.value) {
-      if (msg.command === 'setrepeat') {
-        msg.mode = msg.value ? msg.value : null
-      }
-    }
-    switch (msg.command.toLowerCase()) {
-      case 'playfile':
-        msg.file = msg.value
-        break
-      case 'playid':
-        msg.id = parseIntOrValue(msg.value)
-        break
-      case 'updatetime':
-        msg.time = parseIntOrValue(msg.value)
-        break
-      case 'playlistplay': {
-        if (msg.value) {
-          const parts = msg.value.split(',')
-          msg.id = parseIntOrValue(parts[0])
-          msg.track = parts.length > 1 ? parseIntOrValue(parts[1]) : 0
-        }
-        break
-      }
-      case 'getplaylist':
-        msg.id = parseIntOrValue(msg.value)
-        break
-      case 'setaudiodevice':
-        msg.device = msg.value
-        break
-      case 'fullscreen':
-        // if no value provided in simple command, leave undefined so caller will toggle
-        if (msg.value == null) {
-          msg.fullscreen = undefined
-        } else {
-          msg.fullscreen = parseBool(msg.value)
-        }
-        break
-      case 'startonplay':
-      case 'setstartonplay': {
-        // startonplay,true,123 or startonplay,false
-        if (msg.value) {
-          const parts = msg.value.split(',')
-          msg.enabled = parseBool(parts[0])
-          if (parts.length > 1) {
-            msg.playlistId = parseIntOrValue(parts[1])
-          }
-        }
-        break
-      }
-      default:
-        // leave as-is; many commands have no mapped value
-        break
-    }
-    return msg
+    if (!obj || !obj.command) return { error: { code: 'INVALID_MESSAGE', message: 'Missing "command"' } }
+    const commandName = String(obj.command).toLowerCase()
+    const def = commandLookup.get(commandName)
+    if (!def) return { commandName, def: null }
+    return { commandName, def, params: mapNamed(def.params || [], obj) }
   }
+  // simple: cmd,v1,v2,...
+  const parts = trimmed.split(',')
+  const commandName = (parts[0] || '').trim().toLowerCase()
+  if (!commandName) return { error: { code: 'INVALID_MESSAGE', message: 'Empty command' } }
+  const def = commandLookup.get(commandName)
+  if (!def) return { commandName, def: null }
+  const values = parts.slice(1).map((s) => s.trim())
+  return { commandName, def, params: mapPositional(def.params || [], values) }
 }
 
+// 핸들러 반환값 → TcpResponse.success 데이터/메시지로 정규화
+const toResponse = (def, hr) => {
+  if (typeof hr === 'string') return TcpResponse.success(def.name, hr, {})
+  if (hr && typeof hr === 'object' && ('message' in hr || 'data' in hr)) {
+    return TcpResponse.success(def.name, hr.message || null, hr.data || {})
+  }
+  return TcpResponse.success(def.name, null, hr || {})
+}
+
+/**
+ * 메시지 처리 — 항상 TcpResponse(성공/에러)를 반환한다.
+ */
 const handleMessage = async (data) => {
-  logger.info(`Received message: ${data}`)
+  logger.info(`TCP command received: ${data}`)
+  const norm = normalizeMessage(data)
+
+  if (norm.error) {
+    return TcpResponse.error('unknown', norm.error.message, norm.error.code)
+  }
+  if (!norm.def) {
+    return TcpResponse.error(
+      norm.commandName || 'unknown',
+      `Unknown command: ${norm.commandName}`,
+      'UNKNOWN_COMMAND',
+    )
+  }
+
+  const { def, params } = norm
+
+  // 필수 파라미터 검증
+  for (const p of def.params || []) {
+    if (p.required && params[p.name] === undefined) {
+      return TcpResponse.error(def.name, `Missing required parameter: ${p.name}`, 'MISSING_PARAMETER')
+    }
+  }
+  // 기본값 적용
+  for (const p of def.params || []) {
+    if (params[p.name] === undefined && p.default !== undefined) params[p.name] = p.default
+  }
+
   try {
-    // parse/normalize incoming message (JSON or simple)
-    const message = normalizeMessage(data)
-    if (!message || !message.command) {
-      throw new Error('Invalid message format')
-    }
-
-    const command = message.command.toLowerCase()
-    logger.debug(`Processing command: ${command}`)
-
-    let result = null
-    switch (command) {
-      case 'play':
-        play()
-        result = {
-          command: 'play',
-          message: 'Command executed: play',
-        }
-        break
-      case 'pause':
-        pause()
-        result = {
-          command: 'pause',
-          message: 'Command executed: pause',
-        }
-        break
-      case 'stop':
-        stop()
-        result = {
-          command: 'stop',
-          message: 'Command executed: stop',
-        }
-        break
-      case 'playfile':
-        await playFoundFile(message.file)
-        result = {
-          command: 'playfile',
-          message: `Command executed: playfile ${message.file}`,
-        }
-        break
-      case 'playid':
-        await playId(message.id)
-        result = {
-          command: 'playid',
-          message: `Command executed: playid ${message.id}`,
-        }
-        break
-      case 'next':
-        await setNext()
-        result = {
-          command: 'next',
-          message: 'Moved to next track',
-        }
-        break
-      case 'prev':
-        await setPrevious()
-        result = {
-          command: 'prev',
-          message: 'Command executed: prev',
-        }
-        break
-      case 'updatetime':
-        if (message.time !== undefined) {
-          updateTime(message.time)
-          result = {
-            command: 'updatetime',
-            message: `Time updated to ${message.time}ms`,
-            data: {
-              time: message.time,
-              playerState: pStatus.player,
-            },
-          }
-        } else {
-          result = {
-            command: 'updatetime',
-            message: 'Time parameter required',
-            data: { currentTime: pStatus.player.time },
-          }
-        }
-        break
-      case 'fullscreen':
-        // message.fullscreen may be boolean or undefined.
-        // if undefined -> toggle using current pStatus.fullscreen
-        let fs =
-          typeof message.fullscreen !== 'undefined'
-            ? message.fullscreen
-            : undefined
-        if (typeof fs === 'undefined') fs = !pStatus.fullscreen
-        // ensure boolean
-        fs = Boolean(fs)
-        await setFullscreen(fs)
-        result = {
-          command: 'fullscreen',
-          message: `Fullscreen ${fs ? 'enabled' : 'disabled'}`,
-          data: { fullscreen: fs },
-        }
-        break
-      case 'togglefullscreen':
-        const newFullscreenState = !pStatus.fullscreen
-        await setFullscreen(newFullscreenState)
-        result = {
-          command: 'togglefullscreen',
-          message: `Fullscreen ${newFullscreenState ? 'enabled' : 'disabled'}`,
-          data: { fullscreen: newFullscreenState },
-        }
-        break
-      case 'setrepeat':
-        // check allowed modes based on playlistMode and validate requested mode
-        const allowedModes =
-          pStatus.playlistMode === false
-            ? ['none', 'all']
-            : ['none', 'all', 'repeat_one']
-        if (message.mode) {
-          if (!allowedModes.includes(message.mode)) {
-            result = { error: 'invalid_mode', allowedModes }
-          } else {
-            const modeResult = await setRepeat(message.mode)
-            result = { repeat: modeResult }
-          }
-        } else {
-          // no mode specified -> toggle to next
-          const modeResult = await setRepeat()
-          result = { repeat: modeResult }
-        }
-        break
-      case 'getrepeat':
-        // return current repeat mode and allowed modes
-        const allowed =
-          pStatus.playlistMode === false
-            ? ['none', 'all']
-            : ['none', 'all', 'repeat_one']
-        result = { repeat: pStatus.repeat, allowedModes: allowed }
-        break
-      case 'getaudiodevices':
-        result = { devices: pStatus.audioDevices }
-        break
-      case 'getaudiodevice':
-        result = { device: pStatus.audioDevice }
-        break
-      case 'setaudiodevice':
-        if (message.device) {
-          await setAudioDevice(message.device)
-          result = { device: pStatus.audioDevice }
-        }
-        break
-      case 'playlistplay':
-        if (message.id) {
-          playlistPlay(message.id, message.track || 0)
-        }
-        break
-      case 'getfiles':
-        const files = await dbFiles.find()
-        result = {
-          command: 'getfiles',
-          message: `Found ${files.length} files`,
-          data: { files, count: files.length },
-        }
-        break
-      case 'getplaylists':
-        const playlists = await getPlaylists()
-        result = {
-          command: 'getplaylists',
-          message: `Found ${playlists.length} playlists`,
-          data: {
-            playlists: playlists.map(simplifyPlaylistInfo),
-            count: playlists.length,
-          },
-        }
-        break
-      case 'getplaylist':
-        if (message.id) {
-          const playlist = await getPlaylist(message.id)
-          result = {
-            command: 'getplaylist',
-            message: playlist
-              ? `Found playlist ${message.id}`
-              : `Playlist ${message.id} not found`,
-            data: { playlist: simplifyPlaylistInfo(playlist) },
-          }
-        } else {
-          result = {
-            command: 'getplaylist',
-            message: 'Playlist ID required',
-            data: { error: 'MISSING_PARAMETER', parameter: 'id' },
-          }
-        }
-        break
-      case 'startonplay':
-      case 'setstartonplay':
-        if (message.enabled !== undefined) {
-          // Update startOnPlay setting
-          const enabled = Boolean(message.enabled)
-          pStatus.startOnPlay = enabled
-          await dbStatus.update(
-            { type: 'startOnPlay' },
-            { $set: { value: enabled } },
-            { upsert: true },
-          )
-
-          // Update playlist ID if provided
-          if (enabled && message.playlistId !== undefined) {
-            const playlistId = Number(message.playlistId)
-            if (!isNaN(playlistId)) {
-              pStatus.startOnPlaylistId = playlistId
-              await dbStatus.update(
-                { type: 'startOnPlaylistId' },
-                { $set: { playlistId } },
-                { upsert: true },
-              )
-              result = {
-                command: 'startonplay',
-                message: `Start on play enabled with playlist ${playlistId}`,
-                data: { enabled, playlistId },
-              }
-            } else {
-              result = {
-                command: 'startonplay',
-                message: 'Invalid playlist ID',
-                data: { error: 'INVALID_PLAYLIST_ID' },
-              }
-            }
-          } else {
-            result = {
-              command: 'startonplay',
-              message: `Start on play ${enabled ? 'enabled' : 'disabled'}`,
-              data: { enabled, playlistId: pStatus.startOnPlaylistId },
-            }
-          }
-        } else {
-          // Return current settings
-          result = {
-            command: 'startonplay',
-            message: 'Current start on play settings',
-            data: {
-              enabled: pStatus.startOnPlay,
-              playlistId: pStatus.startOnPlaylistId,
-            },
-          }
-        }
-        break
-      case 'getstartonplay':
-        result = {
-          command: 'getstartonplay',
-          message: 'Current start on play settings',
-          data: {
-            enabled: pStatus.startOnPlay,
-            playlistId: pStatus.startOnPlaylistId,
-          },
-        }
-        break
-      default:
-        result = {
-          command: command || 'unknown',
-          message: `Unknown command: ${command}`,
-          data: {
-            error: 'UNKNOWN_COMMAND',
-            availableCommands: [
-              'play',
-              'pause',
-              'stop',
-              'playid',
-              'playfile',
-              'next',
-              'prev',
-              'fullscreen',
-              'setrepeat',
-              'getrepeat',
-              'setaudiodevice',
-              'getaudiodevices',
-              'getaudiodevice',
-              'updatetime',
-              'playlistplay',
-              'getfiles',
-              'getplaylists',
-              'getplaylist',
-              'startonplay',
-              'getstartonplay',
-            ],
-          },
-        }
-        break
-    }
-    return result
+    logger.debug(`Dispatching command: ${def.name}`)
+    const hr = await def.handler(params)
+    return toResponse(def, hr)
   } catch (error) {
-    logger.error(`Error processing message: ${data}`, error)
-
-    // Return structured error response
-    return {
-      command: 'error',
-      message: `Command execution failed: ${error.message}`,
-      data: {
-        error: 'EXECUTION_ERROR',
-        originalMessage: data,
-        errorDetails: error.stack,
-      },
-    }
+    logger.error(`Command '${def.name}' failed: ${error.message}`)
+    return TcpResponse.error(def.name, error, error.code || 'EXECUTION_ERROR')
   }
 }
 
-export { handleMessage }
+export { handleMessage, normalizeMessage }

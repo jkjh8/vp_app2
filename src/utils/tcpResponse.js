@@ -174,7 +174,16 @@ export class TcpResponseSender {
 }
 
 /**
- * 이벤트 타입
+ * 외부제어 TCP 프로토콜 버전 (재설계 v2 — 네임스페이스 명령 + 기능협상).
+ * 레거시 flat 명령(play/playid/…)은 alias로 계속 동작하므로 major는 2로 두되 하위호환 유지.
+ */
+export const PROTOCOL_VERSION = '2.0'
+
+// 앱 버전 (package.json과 동기화 — 배포 시 함께 올린다).
+export const APP_VERSION = '0.5.9'
+
+/**
+ * 이벤트 타입 (서버 → 전 클라이언트 브로드캐스트)
  */
 export const TCP_EVENTS = {
   PLAYER_READY: 'playerReady',
@@ -189,4 +198,8 @@ export const TCP_EVENTS = {
   FULLSCREEN_CHANGED: 'fullscreenChanged',
   AUDIO_DEVICES_UPDATED: 'audioDevicesUpdated',
   IMAGE_TIME_CHANGED: 'imageTimeChanged',
+  // 재설계 v2 신규 — 무대 제어 상태 변화 통지
+  PLAYBACK_MODE_CHANGED: 'playbackModeChanged',
+  WINDOW_STOPPED: 'windowStopped',
+  REPEAT_CHANGED: 'repeatChanged',
 }

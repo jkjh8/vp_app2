@@ -24,7 +24,7 @@
 처음 실행하면 다음 포트들이 열립니다:
 
 - **웹 인터페이스**: http://localhost:3000
-- **TCP 서버**: localhost:12345
+- **TCP 외부제어**: localhost:15000(단순) / 15001(JSON)
 
 방화벽 경고가 표시되면 액세스를 허용해주세요.
 
@@ -103,18 +103,21 @@
 **연결 정보:**
 
 - 호스트: localhost
-- 포트: 12345
-- 프로토콜: JSON over TCP
+- 포트: **15000(단순, 쉼표 구분)** / **15001(JSON)** — 각 포트는 해당 형식만 허용
+- 프로토콜: TCP, 한 줄당 한 명령(`\n` 구분)
 
 **명령 예시:**
 
 ```json
-{"command": "play"}
-{"command": "playid", "id": 123}
-{"command": "next"}
+{"command": "player.play"}
+{"command": "playlist.play", "id": 1, "track": 0}
+{"command": "window.play", "windowId": 2, "index": 0}
 ```
 
-자세한 내용은 [API 매뉴얼](./API_MANUAL.md)을 참조하세요.
+단순 포트 예시: `player.play` · `playlist.play,1,0` · `mode.set,window`
+
+명령은 `domain.action` 네임스페이스 전용입니다(레거시 flat 명령 없음). 자세한 내용은
+[TCP 프로토콜 문서](./TCP_PROTOCOL.md) 또는 [API 매뉴얼](./API_MANUAL.md)을 참조하세요.
 
 ---
 
@@ -183,7 +186,7 @@
 
 **해결:**
 
-1. 방화벽 설정에서 포트 3000, 12345를 허용하세요
+1. 방화벽 설정에서 포트 3000, 15000, 15001을 허용하세요
 2. 네트워크 연결을 확인하세요
 3. 다른 프로그램이 같은 포트를 사용하지 않는지 확인하세요
 

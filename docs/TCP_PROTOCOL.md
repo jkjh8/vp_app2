@@ -1,228 +1,220 @@
-# TCP 통신 프로토콜 문서
+# TCP 외부제어 프로토콜 (v2)
 
-> **⚠️ 레거시 외부 제어 인터페이스** — 이 TCP 프로토콜은 현재의 REST API + socket.io(`pStatus`)
-> 제어 경로와는 **별개**의 외부 제어용 레거시 인터페이스입니다. 브라우저 SPA/일반 제어는 REST/소켓
-> API(`docs/API_MANUAL.md`)를 사용하며, TCP는 외부 시스템(예: AV 컨트롤러) 연동용으로만 유지됩니다.
+> **외부 제어 인터페이스** — 이 TCP 프로토콜은 외부 시스템(AV 컨트롤러 등) 연동용입니다. 브라우저
+> SPA/일반 제어는 REST API + socket.io(`pStatus`) 경로(`docs/API_MANUAL.md`)를 사용합니다.
 
 ## 개요
 
-VP App2의 TCP 서버는 표준화된 JSON 응답 형식을 사용하여 일관성 있고 명확한 피드백을 제공합니다.
-서버는 두 개의 포트를 엽니다: **단순(comma-separated) 포트**와 **JSON 포트**. 각 포트는 해당 형식만
-허용하며(교차 사용 시 `format_error` 반환), 명령 처리 로직은 동일합니다.
+VP App2의 TCP 서버는 표준 JSON 응답 봉투로 일관된 피드백을 제공합니다. 명령은 `domain.action`
+네임스페이스(소문자)이며 **레거시 flat 명령은 없습니다**(재설계 v2에서 제거). 서버는 두 포트를 엽니다:
+**단순(comma-separated)** 과 **JSON**. 각 포트는 해당 형식만 허용하며(교차 시 `format_error`), 명령
+처리 로직은 동일합니다.
+
+재설계 v2 요점:
+- **네임스페이스 전용 명령** (`domain.action`).
+- **모든 명령이 응답**한다.
+- **버전/기능협상**: 접속 welcome 배너와 `system.capabilities`가 `protocolVersion` + 플레이어
+  `features` + 지원 명령 목록을 제공한다.
+- 다중창 · 재생모드(scene/window) · 프리로딩 · 마스터볼륨 · 디스플레이 · 타임라인 커버.
 
 ## 연결 정보
 
-- **포트**: 15000 (단순/comma-separated) · 15001 (JSON) — 기본값(`pStatus.tcpSimplePort` / `tcpJsonPort`).
-  포트 충돌 시 자동으로 +1 포트로 대체 시도.
-- **프로토콜**: TCP (0.0.0.0 바인드)
-- **데이터 형식**: 한 줄당 하나의 명령. 단순 포트는 `command,value` 형식, JSON 포트는 JSON 객체.
+- **포트**: 15000 (단순/comma-separated) · 15001 (JSON) — 기본값(`pStatus.tcpSimplePort` / `tcpJsonPort`). 충돌 시 +1 대체.
+- **프로토콜**: TCP (0.0.0.0 바인드), 한 줄당 하나의 명령(`\n` 구분).
+- **접속 시** welcome 응답 예:
+
+```json
+{
+  "timestamp": "2026-08-07T10:30:45.123Z",
+  "success": true,
+  "command": "connect",
+  "message": "Connected to VP Server (JSON Command Port)",
+  "data": {
+    "serverId": "vp_app2",
+    "appVersion": "0.5.9",
+    "protocolVersion": "2.0",
+    "port": "json",
+    "format": "json",
+    "features": ["multi_window", "timeline", "master_volume"],
+    "commands": ["player.play", "player.pause", "..."]
+  }
+}
+```
 
 ## 응답 형식
 
-### 성공 응답
+### 성공
 
 ```json
 {
-  "timestamp": "2025-10-18T10:30:45.123Z",
+  "timestamp": "2026-08-07T10:30:45.123Z",
   "success": true,
-  "command": "play",
-  "message": "Playback started",
-  "data": {
-    "currentFile": { ... },
-    "playlistMode": false
-  }
+  "command": "mode.set",
+  "message": "Playback mode: window",
+  "data": { "playbackMode": "window" }
 }
 ```
 
-### 에러 응답
+### 에러
 
 ```json
 {
-  "timestamp": "2025-10-18T10:30:45.123Z",
+  "timestamp": "2026-08-07T10:30:45.123Z",
   "success": false,
-  "command": "playid",
+  "command": "window.play",
   "error": {
-    "code": "NOT_FOUND",
-    "message": "File not found",
-    "details": "Error stack trace..."
+    "code": "EXECUTION_ERROR",
+    "message": "Failed to play window (player not connected or not window mode)",
+    "details": "..."
   }
 }
 ```
 
-### 이벤트 알림 (브로드캐스트)
+### 이벤트 (브로드캐스트, 요청 없이 수신)
 
 ```json
 {
-  "timestamp": "2025-10-18T10:30:45.123Z",
-  "success": true,
-  "command": "event",
-  "message": "Event: nextTrack",
-  "data": {
-    "eventType": "nextTrack",
-    "trackId": 2,
-    "track": { ... }
-  }
-}
-```
-
-## 지원 명령어
-
-### 플레이어 제어
-
-- `play` - 재생 시작
-- `pause` - 일시정지
-- `stop` - 정지
-- `playid,<id>` - 특정 ID 파일 재생
-- `playfile,<filename>` - 파일명으로 검색하여 재생
-- `next` - 다음 트랙
-- `prev` - 이전 트랙
-
-### 설정
-
-- `fullscreen,true/false` - 전체화면 설정 (값 생략 시 토글)
-- `togglefullscreen` - 전체화면 토글
-- `setrepeat,<mode>` - 반복 모드 설정 (none/all/repeat_one)
-- `getrepeat` - 현재 반복 모드 조회
-- `setaudiodevice,<deviceId>` - 오디오 장치 설정
-- `getaudiodevices` - 사용 가능한 오디오 장치 목록
-- `getaudiodevice` - 현재 오디오 장치 조회
-- `startonplay,<true|false>[,<playlistId>]` (별칭 `setstartonplay`) - 부팅 자동재생 설정
-- `getstartonplay` - 부팅 자동재생 설정 조회
-
-### 플레이리스트
-
-- `playlistplay,<playlistId>,<trackIndex>` - 플레이리스트 재생
-- `getplaylists` - 플레이리스트 목록 조회
-- `getplaylist,<id>` - 특정 플레이리스트 조회
-
-### 파일 관리
-
-- `getfiles` - 파일 목록 조회
-
-### 기타
-
-- `updatetime,<milliseconds>` - 재생 시간 업데이트
-
-## 명령어 형식
-
-### JSON 형식 (권장)
-
-```json
-{
-  "command": "playid",
-  "id": 5
-}
-```
-
-### 간단한 형식
-
-```
-playid,5
-```
-
-## 에러 코드
-
-- `UNKNOWN_ERROR` - 알 수 없는 오류
-- `COMMAND_ERROR` - 명령어 실행 오류
-- `NOT_FOUND` - 요청한 리소스를 찾을 수 없음
-- `INVALID_PARAMETER` - 잘못된 매개변수
-- `EXECUTION_ERROR` - 실행 중 오류
-- `MISSING_PARAMETER` - 필수 매개변수 누락
-- `UNKNOWN_COMMAND` - 알 수 없는 명령어
-
-## 이벤트 타입
-
-클라이언트는 다음 이벤트들을 자동으로 수신합니다:
-
-- `playStarted` - 재생 시작 (play, playId, playFile)
-- `playPaused` - 재생 일시정지
-- `playStopped` - 재생 정지
-- `nextTrack` - 다음 트랙으로 이동
-- `prevTrack` - 이전 트랙으로 이동
-- `endReached` - 재생 종료
-- `fullscreenChanged` - 전체화면 상태 변경
-- `audioDevicesUpdated` - 오디오 장치 목록 업데이트
-- `imageTimeChanged` - 이미지 표시 시간 변경
-
-## 이벤트 데이터 예시
-
-### 재생 시작 이벤트
-
-```json
-{
-  "timestamp": "2025-10-18T10:30:45.123Z",
+  "timestamp": "2026-08-07T10:30:45.123Z",
   "success": true,
   "command": "event",
   "message": "Event: playStarted",
-  "data": {
-    "eventType": "playStarted",
-    "fileId": 5,
-    "filename": "example.mp4"
-  }
+  "data": { "eventType": "playStarted", "fileId": 5, "filename": "example.mp4" }
 }
 ```
 
-### 다음 트랙 이벤트
+## 명령 형식
 
-```json
-{
-  "timestamp": "2025-10-18T10:30:45.123Z",
-  "success": true,
-  "command": "event",
-  "message": "Event: nextTrack",
-  "data": {
-    "eventType": "nextTrack",
-    "trackId": 2
-  }
-}
-```
+- **JSON 포트(15001)**: `{"command": "domain.action", ...파라미터}` — 파라미터는 이름으로 지정.
+- **단순 포트(15000)**: `domain.action,value1,value2,...` — 파라미터는 스펙 순서대로 위치 지정.
+
+예) 창별 재생 — JSON `{"command":"window.play","windowId":2,"index":0}` · 단순 `window.play,2,0`
+
+## 지원 명령
+
+### 재생 제어 (player.*)
+- `player.play [windowId]` — 재생
+- `player.pause [windowId]` — 일시정지/재개
+- `player.stop [windowId]` — 정지(미지정=전체)
+- `player.next [windowId]` / `player.prev [windowId]`
+- `player.seek <ms> [windowId]` — 탐색
+- `player.fullscreen [true|false]` — 전체화면(값 생략 시 토글)
+
+### 플레이리스트 (playlist.*)
+- `playlist.play <id> [track]`
+- `playlist.preload <id>` — 전 트랙 프리롤(재생 안 함)
+- `playlist.list` / `playlist.get <id>`
+
+### 재생 모드 (mode.*)
+- `mode.set <scene|window>` — 전역 작업 모드
+- `mode.get`
+- `mode.switch <playlistId> <scene|window>` — 특정 플레이리스트 타입 즉시 전환
+
+### 창별 제어 (window.*) — 윈도우 모드/멀티윈도우 기능 필요
+- `window.play <windowId> [index] [playlistId]`
+- `window.stop <windowId>`
+- `window.next <windowId>` / `window.prev <windowId>`
+- `window.list`
+
+### 프리로딩 (preload.*)
+- `preload.config <lookahead> <maxDecks>`
+- `preload.get`
+
+### 오디오 (audio.*)
+- `audio.setdevice <deviceId>`
+- `audio.listdevices` / `audio.getdevice`
+- `audio.mastervolume <0-100>` / `audio.getmastervolume`
+- `audio.channeldelays <ms,ms,...>`
+
+### 화면 · 로고 (display.* / logo.*)
+- `display.set <monitorIndex> [x y width height aspectMode]`
+- `display.list`
+- `display.background <#rrggbb>`
+- `logo.show <true|false>` / `logo.size <n>`
+
+### 반복 (repeat.*)
+- `repeat.set [none|all|repeat_one]` — 생략 시 토글
+- `repeat.get`
+
+### 타임라인 (timeline.*) — 플레이어 timeline 기능 필요
+- `timeline.play <timelineId> [ms]`
+- `timeline.pause` / `timeline.stop` / `timeline.seek <ms>`
+
+### 시스템 · 자동 시작 · 조회
+- `system.status` — 상태 스냅샷
+- `system.version` — 앱/프로토콜 버전
+- `system.capabilities` — 버전 + features + 지원 명령 목록
+- `startonplay.set [true|false] [playlistId]` / `startonplay.get`
+- `files.list`
+
+## 에러 코드
+
+`UNKNOWN_COMMAND` · `MISSING_PARAMETER` · `INVALID_PARAMETER` · `NOT_FOUND` · `EXECUTION_ERROR` ·
+`FORMAT_ERROR`(포트 형식 불일치) · `INVALID_JSON` · `INVALID_MESSAGE` · `COMMAND_ERROR` · `UNKNOWN_ERROR`
+
+## 이벤트 타입
+
+`playerReady` · `playStarted` · `playPaused` · `playStopped` · `nextTrack` · `prevTrack` ·
+`trackEnded` · `endReached` · `mediaChanged` · `fullscreenChanged` · `audioDevicesUpdated` ·
+`playbackModeChanged` · `windowStopped` · `repeatChanged`
 
 ## 사용 예시
 
-### Python 클라이언트 예시
+### Node.js
+
+```js
+const net = require('net')
+
+// 1) Simple 포트(15000): 쉼표 구분 텍스트 명령
+const simple = net.connect(15000, 'localhost', () => {
+  simple.write('mode.set,window\n')
+  simple.write('window.play,2,0\n')
+  simple.write('audio.mastervolume,50\n')
+})
+
+// 2) JSON 포트(15001): JSON 객체 명령
+const json = net.connect(15001, 'localhost', () => {
+  json.write(JSON.stringify({ command: 'system.capabilities' }) + '\n')
+  json.write(JSON.stringify({ command: 'playlist.play', id: 1, track: 0 }) + '\n')
+})
+
+json.on('data', (buf) => {
+  for (const line of buf.toString().split('\n').filter(Boolean)) {
+    console.log('수신:', JSON.parse(line))
+  }
+})
+```
+
+### Python
 
 ```python
-import socket
-import json
+import socket, json
 
-# 연결 (JSON 포트)
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect(('localhost', 15001))
+# 1) Simple 포트(15000): 쉼표 구분 텍스트 명령
+s = socket.create_connection(('localhost', 15000))
+for cmd in ['mode.set,window', 'window.play,2,0', 'audio.mastervolume,50']:
+    s.sendall((cmd + '\n').encode())
 
-# 명령 전송
-command = {"command": "play"}
-sock.send((json.dumps(command) + '\n').encode())
+# 2) JSON 포트(15001): JSON 객체 명령
+j = socket.create_connection(('localhost', 15001))
+def send(obj):
+    j.sendall((json.dumps(obj) + '\n').encode())
 
-# 응답 수신
-response = sock.recv(1024).decode()
-data = json.loads(response)
+send({'command': 'system.capabilities'})
+send({'command': 'playlist.play', 'id': 1, 'track': 0})
 
-if data['success']:
-    print(f"Success: {data['message']}")
-else:
-    print(f"Error: {data['error']['message']}")
+buf = ''
+while True:
+    buf += j.recv(4096).decode()
+    while '\n' in buf:
+        line, buf = buf.split('\n', 1)
+        if line:
+            print('수신:', json.loads(line))
 ```
 
-### 간단한 텔넷 테스트
+## 설계 원칙
 
-```bash
-telnet localhost 15000   # 단순 포트: comma-separated 명령
-# 연결 후 명령 입력:
-play
-# 또는
-playid,1
-
-# JSON 명령은 JSON 포트(15001)로:
-telnet localhost 15001
-{"command": "playid", "id": 1}
-```
-
-## 주요 개선사항
-
-1. **일관된 응답 형식**: 모든 응답이 동일한 구조를 따름
-2. **명확한 에러 정보**: 에러 코드와 상세 메시지 제공
-3. **타임스탬프**: 모든 응답에 시간 정보 포함
-4. **구조화된 데이터**: 명령어별 관련 데이터를 체계적으로 제공
-5. **이벤트 시스템**: 의미있는 액션과 상태 변경만 실시간으로 알림
-6. **최적화된 이벤트**: 중요한 이벤트만 선별하여 불필요한 트래픽 최소화
-7. **간소화된 데이터**: 필수 정보만 포함하여 네트워크 효율성 극대화
+1. **일관된 응답 봉투** — 모든 응답이 `timestamp/success/command` 공유.
+2. **명확한 에러** — 코드 + 메시지 + 상세.
+3. **모든 명령 응답** — 조회/설정/트랜스포트 모두 응답(이벤트는 별도 브로드캐스트).
+4. **버전/기능협상** — 신규 명령 사용 전 `system.capabilities`로 features 확인.
+5. **네임스페이스 전용** — 모든 명령은 `domain.action`. 레거시 flat 명령은 지원하지 않는다.

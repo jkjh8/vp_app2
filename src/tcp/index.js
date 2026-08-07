@@ -2,11 +2,28 @@ import net from 'net'
 import pStatus from '../pStatus.js'
 import { logger } from '../logger/index.js'
 import { handleMessage } from '../api/terminal/index.js'
+import { commandNames } from '../api/terminal/commands.js'
 import {
   TcpResponse,
   TcpResponseSender,
   TCP_EVENTS,
+  PROTOCOL_VERSION,
+  APP_VERSION,
 } from '../utils/tcpResponse.js'
+
+// 접속 환영 메시지 payload (버전 + 기능협상). format = 'simple' | 'json'.
+function welcomeData(clientId, format) {
+  return {
+    serverId: 'vp_app2',
+    appVersion: APP_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    clientId,
+    port: format,
+    format: format === 'simple' ? 'comma-separated' : 'json',
+    features: pStatus.playerFeatures || [], // 플레이어 capabilities (multi_window/timeline/…)
+    commands: commandNames, // 지원하는 정규 명령 목록
+  }
+}
 
 let simpleTcpServer = null
 let jsonTcpServer = null
@@ -35,14 +52,7 @@ function startSimpleTcpServer(port = pStatus.tcpSimplePort) {
     const welcomeResponse = TcpResponse.success(
       'connect',
       'Connected to VP Server (Simple Command Port)',
-      {
-        serverId: 'vp_app2',
-        version: '0.1.8',
-        clientId,
-        port: 'simple',
-        format: 'comma-separated',
-        capabilities: ['player', 'playlist', 'files', 'status'],
-      },
+      welcomeData(clientId, 'simple'),
     )
     responseSender.sendTo(socket, welcomeResponse)
 
@@ -65,40 +75,24 @@ function startSimpleTcpServer(port = pStatus.tcpSimplePort) {
             const errorResponse = TcpResponse.error(
               'format_error',
               'JSON format not allowed on Simple TCP port. Use JSON TCP port instead.',
+              'FORMAT_ERROR',
             )
             responseSender.sendTo(socket, errorResponse)
             continue
           }
 
-          // Parse command from simple format
-          const parts = trimmedMessage.split(',')
-          const command = parts[0] || 'unknown'
-
-          const result = await handleMessage(trimmedMessage)
-
-          // 이벤트가 아닌 쿼리/설정 명령어만 응답 전송 (중복 방지)
-          const queryCommands = [
-            'getfiles',
-            'getplaylists',
-            'getplaylist',
-            'getrepeat',
-            'getaudiodevices',
-            'getaudiodevice',
-            'setrepeat',
-            'setaudiodevice',
-            'updatetime',
-            'fullscreen',
-            'togglefullscreen',
-          ]
-          if (queryCommands.includes(command.toLowerCase())) {
-            responseSender.respondToCommand(socket, command, result)
-          }
+          // dispatcher가 표준 TcpResponse(성공/에러)를 반환 — 모든 명령에 응답.
+          const response = await handleMessage(trimmedMessage)
+          responseSender.sendTo(socket, response)
         } catch (error) {
           logger.error(
             `Error handling Simple TCP message from ${clientId}:`,
             error,
           )
-          responseSender.respondToCommand(socket, 'unknown', null, error)
+          responseSender.sendTo(
+            socket,
+            TcpResponse.error('unknown', error, 'EXECUTION_ERROR'),
+          )
         }
       }
     })
@@ -167,14 +161,7 @@ function startJsonTcpServer(port = pStatus.tcpJsonPort) {
     const welcomeResponse = TcpResponse.success(
       'connect',
       'Connected to VP Server (JSON Command Port)',
-      {
-        serverId: 'vp_app2',
-        version: '0.1.8',
-        clientId,
-        port: 'json',
-        format: 'json',
-        capabilities: ['player', 'playlist', 'files', 'status'],
-      },
+      welcomeData(clientId, 'json'),
     )
     responseSender.sendTo(socket, welcomeResponse)
 
@@ -190,44 +177,30 @@ function startJsonTcpServer(port = pStatus.tcpJsonPort) {
           )
 
           // Validate: must be JSON format on JSON port
-          let command = 'unknown'
           try {
-            const parsed = JSON.parse(trimmedMessage)
-            command = parsed.command || 'unknown'
+            JSON.parse(trimmedMessage)
           } catch (parseError) {
             const errorResponse = TcpResponse.error(
               'format_error',
               'Invalid JSON format. Simple commands not allowed on JSON TCP port. Use Simple TCP port instead.',
+              'FORMAT_ERROR',
             )
             responseSender.sendTo(socket, errorResponse)
             continue
           }
 
-          const result = await handleMessage(trimmedMessage)
-
-          // 이벤트가 아닌 쿼리/설정 명령어만 응답 전송 (중복 방지)
-          const queryCommands = [
-            'getfiles',
-            'getplaylists',
-            'getplaylist',
-            'getrepeat',
-            'getaudiodevices',
-            'getaudiodevice',
-            'setrepeat',
-            'setaudiodevice',
-            'updatetime',
-            'fullscreen',
-            'togglefullscreen',
-          ]
-          if (queryCommands.includes(command.toLowerCase())) {
-            responseSender.respondToCommand(socket, command, result)
-          }
+          // dispatcher가 표준 TcpResponse(성공/에러)를 반환 — 모든 명령에 응답.
+          const response = await handleMessage(trimmedMessage)
+          responseSender.sendTo(socket, response)
         } catch (error) {
           logger.error(
             `Error handling JSON TCP message from ${clientId}:`,
             error,
           )
-          responseSender.respondToCommand(socket, 'unknown', null, error)
+          responseSender.sendTo(
+            socket,
+            TcpResponse.error('unknown', error, 'EXECUTION_ERROR'),
+          )
         }
       }
     })

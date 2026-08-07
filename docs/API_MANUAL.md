@@ -208,11 +208,14 @@ Phase B 타임라인 모드(플레이리스트 모드와 상호 배타). 트랜�
 
 ## TCP 외부 제어
 
-TCP 인터페이스(단순 포트 15000 / JSON 포트 15001)는 REST/소켓 API와 **별개의 레거시 외부 제어**
-경로입니다. 상세는 `docs/TCP_PROTOCOL.md`를 참조하세요.
+TCP 인터페이스(단순 포트 15000 / JSON 포트 15001)는 REST/소켓 API와 **별개의 외부 제어** 경로입니다.
+재설계 v2에서 `domain.action` 네임스페이스 명령 + 기능협상(`system.capabilities`)을 도입했고, 다중창·
+재생모드(scene/window)·프리로딩·마스터볼륨·디스플레이·타임라인을 노출합니다. **네임스페이스 전용**이며
+레거시 flat 명령(play/playid 등)은 제거됐습니다. 상세는 `docs/TCP_PROTOCOL.md`를 참조하세요.
 
 ---
 
 ## 버전 정보
 
-- **Version**: 0.5.8
+- **Version**: 0.5.9
+- **TCP 외부제어 프로토콜**: v2.0
