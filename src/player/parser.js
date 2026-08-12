@@ -462,6 +462,7 @@ const parsePlayerStatus = async (data) => {
               width: w.width ?? 0,
               height: w.height ?? 0,
               aspect_mode: w.aspectMode ?? 'letterbox',
+              z_order: w.zOrder ?? 0,
             })
             if (w.backgroundColor)
               playerSend({ command: 'background_color', window_id: w.id, color: w.backgroundColor })
@@ -472,6 +473,13 @@ const parsePlayerStatus = async (data) => {
         // 전역 마스터 볼륨 복원
         if (pStatus.playerFeatures.includes('master_volume')) {
           playerSend({ command: 'set_master_volume', volume: pStatus.masterVolume })
+        }
+        // 멀티 PC 동기(v3): slave/master 역할이면 플레이어 준비 시점에 PTP를 켠다.
+        // (role 설정/부팅 시점엔 플레이어 미연결이라 enable_ptp가 유실될 수 있어 여기서 확정 발신.)
+        if (pStatus.sync?.role !== 'standalone' && pStatus.playerFeatures.includes('ptp_sync')) {
+          import('../api/player/peerSync.js').then(({ enablePtpLocal }) =>
+            enablePtpLocal(pStatus.sync.domain),
+          )
         }
         break
 

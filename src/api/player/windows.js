@@ -18,6 +18,30 @@ const persistWindows = async () => {
   ioClient.emit('pStatus', { windows: pStatus.windows })
 }
 
+const persistPresets = async () => {
+  await dbStatus.update(
+    { type: 'windowPresets' },
+    { $set: { value: pStatus.windowPresets } },
+    { upsert: true },
+  )
+  ioClient.emit('pStatus', { windowPresets: pStatus.windowPresets })
+}
+
+const nextPresetId = () => {
+  const ids = (pStatus.windowPresets || []).map((p) => p.id)
+  return (ids.length ? Math.max(...ids) : 0) + 1
+}
+
+// 현재 배치가 어느 프리셋과 일치하는지 표시용. 프리셋 적용/저장/덮어쓰기 시 그 프리셋으로 설정하고,
+// 창을 직접 편집(생성/수정/삭제)하면 배치가 어긋나므로 null로 해제한다.
+const setActivePreset = async (id) => {
+  const next = id == null ? null : Number(id)
+  if (pStatus.activePresetId === next) return
+  pStatus.activePresetId = next
+  await dbStatus.update({ type: 'activePreset' }, { $set: { value: next } }, { upsert: true })
+  ioClient.emit('pStatus', { activePresetId: next })
+}
+
 const nextWindowId = () => {
   const ids = new Set((pStatus.windows || []).map((w) => w.id))
   let id = 1 // 주 창(0) 개념 폐지 — id는 1부터
@@ -42,6 +66,7 @@ const normalize = (cfg = {}, id) => ({
   height: Number.isFinite(cfg.height) ? cfg.height : 0,
   aspectMode: cfg.aspectMode || 'letterbox',
   backgroundColor: cfg.backgroundColor || '#000000',
+  zOrder: Number.isInteger(cfg.zOrder) ? cfg.zOrder : 0, // 겹칠 때 쌓임 순서 (클수록 앞)
 })
 
 const listWindows = () => ({
@@ -67,10 +92,12 @@ const createWindow = async (cfg = {}) => {
     width: win.width,
     height: win.height,
     aspect_mode: win.aspectMode,
+    z_order: win.zOrder,
   })
   if (win.backgroundColor)
     playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
   playerSend({ command: 'get_windows' })
+  await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   logger.info(`Window config created: ${id} (${win.name})`)
   return win
 }
@@ -92,9 +119,11 @@ const updateWindow = async (id, patch = {}) => {
     width: win.width,
     height: win.height,
     aspect_mode: win.aspectMode,
+    z_order: win.zOrder,
   })
   if (patch.backgroundColor)
     playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
+  await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   return win
 }
 
@@ -102,6 +131,7 @@ const deleteWindow = async (id) => {
   id = Number(id)
   pStatus.windows = (pStatus.windows || []).filter((w) => w.id !== id)
   await persistWindows()
+  await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   playerSend({ command: 'destroy_window', window_id: id })
   playerSend({ command: 'get_windows' })
   // 데이터 정리: 삭제된 창을 참조하던 클립을 전 플레이리스트에서 제거 (창 수 축소 시 오류 방지).
@@ -159,6 +189,90 @@ const setPreloadConfig = async ({ lookahead, maxDecks } = {}) => {
   return { lookahead: pStatus.preloadLookahead, maxDecks: pStatus.preloadMaxDecks }
 }
 
+// --- 화면 구성 프리셋 -------------------------------------------------------
+// 프리셋 = 현재 출력 창 배치(windows)의 이름 붙은 스냅샷. 저장/목록/적용/이름변경/삭제.
+
+const listPresets = () => pStatus.windowPresets || []
+
+// 현재 windows 배치를 새 프리셋으로 저장 (깊은 복사 스냅샷).
+const savePreset = async (name) => {
+  const id = nextPresetId()
+  const preset = {
+    id,
+    name: (name && String(name).trim()) || `Layout ${id}`,
+    windows: JSON.parse(JSON.stringify(pStatus.windows || [])),
+    createdAt: Date.now(),
+  }
+  pStatus.windowPresets = [...(pStatus.windowPresets || []), preset]
+  await persistPresets()
+  await setActivePreset(id) // 방금 저장 = 현재 배치가 이 프리셋과 일치
+  logger.info(`Window preset saved: ${id} (${preset.name})`)
+  return preset
+}
+
+// 기존 프리셋을 현재 배치로 덮어쓰기 (재스냅샷).
+const updatePreset = async (id) => {
+  const p = (pStatus.windowPresets || []).find((x) => x.id === Number(id))
+  if (!p) return null
+  p.windows = JSON.parse(JSON.stringify(pStatus.windows || []))
+  p.updatedAt = Date.now()
+  await persistPresets()
+  await setActivePreset(p.id) // 현재 배치로 덮어씀 = 일치
+  return p
+}
+
+const renamePreset = async (id, name) => {
+  const p = (pStatus.windowPresets || []).find((x) => x.id === Number(id))
+  if (!p) return null
+  const trimmed = String(name || '').trim()
+  if (trimmed) p.name = trimmed
+  await persistPresets()
+  return p
+}
+
+const deletePreset = async (id) => {
+  pStatus.windowPresets = (pStatus.windowPresets || []).filter((p) => p.id !== Number(id))
+  await persistPresets()
+  if (pStatus.activePresetId === Number(id)) await setActivePreset(null)
+  return true
+}
+
+// 프리셋 적용: 현재 창을 전부 파괴하고 프리셋의 창 배치로 재생성.
+const applyPreset = async (id) => {
+  const preset = (pStatus.windowPresets || []).find((p) => p.id === Number(id))
+  if (!preset) return null
+  // 1. 현재 창 전부 파괴
+  for (const w of pStatus.windows || []) {
+    playerSend({ command: 'destroy_window', window_id: w.id })
+  }
+  // 2. 프리셋 창으로 교체 (정규화, 저장된 id 유지)
+  const next = (preset.windows || []).map((w, i) =>
+    normalize(w, Number.isInteger(w.id) ? w.id : i + 1),
+  )
+  pStatus.windows = next
+  await persistWindows()
+  // 3. 프리셋 창 생성 + 배경/z 적용
+  for (const win of next) {
+    playerSend({
+      command: 'create_window',
+      window_id: win.id,
+      monitor_index: win.monitorIndex,
+      x: win.x,
+      y: win.y,
+      width: win.width,
+      height: win.height,
+      aspect_mode: win.aspectMode,
+      z_order: win.zOrder,
+    })
+    if (win.backgroundColor)
+      playerSend({ command: 'background_color', window_id: win.id, color: win.backgroundColor })
+  }
+  playerSend({ command: 'get_windows' })
+  await setActivePreset(preset.id) // 적용 = 현재 배치가 이 프리셋
+  logger.info(`Window preset applied: ${preset.id} (${preset.name}) — ${next.length} windows`)
+  return preset
+}
+
 export {
   listWindows,
   createWindow,
@@ -166,4 +280,10 @@ export {
   deleteWindow,
   setPreloadConfig,
   setChannelDelays,
+  listPresets,
+  savePreset,
+  updatePreset,
+  renamePreset,
+  deletePreset,
+  applyPreset,
 }

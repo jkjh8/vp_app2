@@ -1,0 +1,1 @@
+import{aa as e,a as o}from"./index-DcihR0ZL.js";const a="vp-theme";function r(){const t=localStorage.getItem(a);t==="dark"?e.set(!0):t==="light"?e.set(!1):e.set("auto")}function c(){return{isDark:o(()=>e.isActive),toggle:()=>{const s=!e.isActive;e.set(s),localStorage.setItem(a,s?"dark":"light")}}}export{r as a,c as u};

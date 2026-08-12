@@ -12,6 +12,7 @@ import {
 import { startTcpServer } from './tcp/index.js'
 import { startPlayer, stopPlayer } from './player/index.js'
 import { initSync } from './api/player/peerSync.js'
+import { initDiscovery } from './api/player/discovery.js'
 
 // 종료 시 플레이어 프로세스 정리 (Electron 생명주기 대체)
 onShutdown(() => stopPlayer())
@@ -34,9 +35,11 @@ if (!gotTheLock) {
     logger.debug('Database initialized')
     await updateStatusFromDb()
     logger.debug('Status updated from database')
-    initSync() // 멀티 PC 동기 설정 복원 (role!=standalone이면 멀티캐스트 소켓 구성)
+    initSync() // 멀티 PC 동기 설정 복원 (role!=standalone이면 트리거 소켓 구성)
     setupFFmpeg()
     initWebServer()
+    // 자동 디스커버리 (ioClient/DB 준비된 뒤) — slave 광고 / master 수집
+    initDiscovery().catch((e) => logger.warn(`initDiscovery failed: ${e.message}`))
 
     // TCP 서버는 선택적으로 시작 (실패해도 앱 계속 실행)
     try {

@@ -1,0 +1,1 @@
+import{d as e}from"./index-DcihR0ZL.js";import{a}from"./index-xsH4HHeE.js";const t=()=>window.location.origin,o=a.create({baseURL:t()+"/api"}),s=()=>o,n=()=>t(),c=e(({app:i})=>{i.config.globalProperties.$axios=o,i.config.globalProperties.$api=o,window.getApi=s,window.getBaseURL=n});export{c as default,s as getApi,n as getBaseURL};

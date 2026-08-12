@@ -47,6 +47,14 @@ const updateStatusFromDb = async () => {
         // 멀티 윈도우(v3) 사용자 정의 출력 창 목록
         pStatus.windows = Array.isArray(status.value) ? status.value : pStatus.windows
         break
+      case 'windowPresets':
+        // 화면 구성 프리셋 목록
+        pStatus.windowPresets = Array.isArray(status.value) ? status.value : pStatus.windowPresets
+        break
+      case 'activePreset':
+        // 현재 배치와 일치하는 프리셋 id
+        pStatus.activePresetId = Number.isInteger(status.value) ? status.value : pStatus.activePresetId
+        break
       case 'preload':
         // 프리롤 설정 (lookahead/max_decks)
         if (status.value && typeof status.value === 'object') {
@@ -57,9 +65,28 @@ const updateStatusFromDb = async () => {
         }
         break
       case 'sync':
-        // 멀티 PC 동기 설정 (role/domain/peers/multicast/lead)
+        // 멀티 PC 동기 설정 (role/domain/multicast/lead). ptp/discovered/show/playerId는 런타임·별도 케이스가 소유.
         if (status.value && typeof status.value === 'object') {
-          pStatus.sync = { ...pStatus.sync, ...status.value, ptp: pStatus.sync.ptp }
+          pStatus.sync = {
+            ...pStatus.sync,
+            ...status.value,
+            ptp: pStatus.sync.ptp,
+            discovered: {}, // 런타임 전용 — 부팅 시 항상 빈 목록
+            show: pStatus.sync.show,
+            playerId: pStatus.sync.playerId,
+          }
+        }
+        break
+      case 'playerId':
+        // 이 PC의 안정적 식별자 (디스커버리 announce 키). discovery.js가 없으면 생성·영속.
+        if (typeof status.value === 'string' && status.value) {
+          pStatus.sync.playerId = status.value
+        }
+        break
+      case 'show':
+        // (master) 쇼 매핑 { mode, domain, leadMs, assignments }
+        if (status.value && typeof status.value === 'object') {
+          pStatus.sync.show = { ...pStatus.sync.show, ...status.value }
         }
         break
       case 'channelDelays':

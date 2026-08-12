@@ -701,6 +701,13 @@ const fileForPlayer = (clip) => toPlayerFile(clip)
 let currentSceneIdx = 0
 let sceneEndedWins = new Set()
 
+// slave 전환 정책 (멀티 PC): 'master' = master 트리거로만 전환(미러) / 'self' = 자체 전환(분산).
+// startMultiWindowSynced가 트리거 페이로드의 advance 값으로 설정. standalone/master는 무관.
+let slaveAdvanceMode = 'master'
+// slave가 master 트리거를 기다려야 하는가 (미러 모드 slave만 true — 자체 advance 억제)
+const slaveWaitsForMaster = () =>
+  pStatus.sync?.role === 'slave' && slaveAdvanceMode !== 'self'
+
 // 오디오 전용 장면(영상 없음)의 다음 장면 전환 타이머 — 영상 end_reached가 없으므로 오디오 길이로
 // 넘긴다. 장면 전환/정지 시 반드시 정리(clearSceneAudioTimer)해 유령 전환을 막는다.
 let sceneAudioTimer = null
@@ -901,8 +908,8 @@ const playScene = (sceneIdx, startAt = null) => {
   syncTrackAudios(sceneIdx, true)
   applySceneChannelDelays(scene) // 이 장면의 채널별 출력 지연 적용
   // 오디오 전용 장면(영상 클립 없음): 영상 end_reached가 없으므로 오디오 길이만큼 재생 후 다음 장면
-  // 으로 넘긴다. slave는 master 멀티캐스트 트리거로만 전환하므로 자체 타이머를 걸지 않는다.
-  if (clipsHere.length === 0 && pStatus.sync?.role !== 'slave') {
+  // 으로 넘긴다. 미러 slave는 master 트리거로만 전환하므로 자체 타이머를 걸지 않는다(분산 slave는 자체 전환).
+  if (clipsHere.length === 0 && !slaveWaitsForMaster()) {
     const holdMs = audioOnlyHoldMs(scene)
     if (holdMs != null) {
       sceneAudioTimer = setTimeout(() => {
@@ -1035,24 +1042,32 @@ const advanceScene = (startAt = null) => {
   triggerOrPlayScene(next, startAt)
 }
 
-// master면 공유 start_at 계산 후 전 PC 트리거, 아니면 로컬 재생
+// master면 공유 start_at 계산 후 재생. 미러 모드에선 전 slave에도 새 start_at 재트리거(장면 락스텝),
+// 분산 모드에선 slave가 자체 전환하므로 master는 자기 창만 전진한다.
 const triggerOrPlayScene = (sceneIdx, startAt = null) => {
   if (pStatus.sync?.role === 'master' && startAt == null) {
-    import('../player/peerSync.js').then(({ computeStartAt, triggerSyncPlay }) => {
-      const at = computeStartAt()
-      const baseTime = Number(pStatus.sync.ptp?.base_time)
+    import('../player/peerSync.js').then(async ({ computeStartAt, triggerSyncPlay }) => {
+      const at = await computeStartAt()
       playScene(sceneIdx, at)
-      triggerSyncPlay(pStatus.playlist.playlistId, sceneIdx, at, baseTime)
+      if (pStatus.sync.show?.mode !== 'distributed') {
+        triggerSyncPlay(mirrorAssignments(pStatus.playlist.playlistId, sceneIdx), at)
+      }
     })
   } else {
     playScene(sceneIdx, startAt)
   }
 }
 
+// 발견된 온라인 slave 전부에 동일 playlistId(미러) — [{ip, playlistId, trackIdx, advanceMode}]
+const mirrorAssignments = (playlistId, trackIdx) =>
+  Object.values(pStatus.sync.discovered || {})
+    .filter((p) => p.online && p.role === 'slave' && p.ip)
+    .map((p) => ({ ip: p.ip, playlistId, trackIdx, advanceMode: 'master' }))
+
 // 창별 end_reached 수신 — 현재 장면의 모든 활성 창이 끝나면 다음 장면으로 (가장 긴 클립 기준).
 // 먼저 끝난 창은 마지막 프레임을 유지(정지화면). slave는 자체 전환하지 않고 master 트리거를 따른다.
 const onSceneWindowEnd = (data) => {
-  if (pStatus.sync?.role === 'slave') return // slave는 master 멀티캐스트 트리거로만 전환
+  if (slaveWaitsForMaster()) return // 미러 slave는 master 트리거로만 전환 (분산 slave는 자체 전환)
   const scenes = pStatus.playlist?.tracks || []
   const scene = scenes[currentSceneIdx]
   if (!scene) return
@@ -1449,8 +1464,15 @@ const manualStep = (delta, windowId = null) => {
   return pStatus.playlist?.mode === 'window' ? stepWindow(delta, windowId) : stepScene(delta)
 }
 
-// slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (멀티캐스트 트리거 진입점)
-const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) => {
+// slave/로컬: 지정 playlist를 로드해 공유 start_at으로 멀티 윈도우 재생 (유니캐스트 트리거 진입점).
+// advanceMode='master'(미러 — master 재트리거 대기) | 'self'(분산 — 자체 전환).
+const startMultiWindowSynced = async (
+  playlistId,
+  trackIdx = 0,
+  startAt = null,
+  advanceMode = 'master',
+) => {
+  slaveAdvanceMode = advanceMode === 'self' ? 'self' : 'master'
   if (
     Object.keys(pStatus.playlist).length === 0 ||
     pStatus.playlist.playlistId !== playlistId
@@ -1462,7 +1484,7 @@ const startMultiWindowSynced = async (playlistId, trackIdx = 0, startAt = null) 
   await setPlaylistMode(true)
   if (!(pStatus.playlist.tracks || []).length) return null
   startScenes(trackIdx, startAt)
-  return `synced play ${playlistId} @${startAt}`
+  return `synced play ${playlistId} @${startAt} (${slaveAdvanceMode})`
 }
 
 const playlistPlay = async (playlistId, trackIdx = 0) => {
@@ -1506,14 +1528,18 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
 
     // 장면(Scene) 재생 — 트랙=장면(창별 클립 묶음). 멀티 윈도우 플레이어 필수.
     if (multiWin()) {
-      // 멀티 PC master: 공유 start_at 계산 후 로컬+전 slave 동시 트리거 (락스텝)
+      // 멀티 PC master: 발견된 slave 전부에 같은 playlistId 미러 (락스텝). 신선한 start_at + base_time 배포.
+      // (per-slave 서로 다른 playlistId·전체 arm 시퀀스는 fleet 쇼 재생 경로 — /api/fleet/show/play.)
       if (pStatus.sync?.role === 'master') {
-        const { computeStartAt, triggerSyncPlay } = await import('../player/peerSync.js')
-        const startAt = computeStartAt()
-        const baseTime = Number(pStatus.sync.ptp?.base_time)
+        const { computeStartAt, triggerSyncPlay, distributeBaseTime } = await import(
+          '../player/peerSync.js'
+        )
+        const assignments = mirrorAssignments(playlistId, Number(trackIdx))
+        distributeBaseTime(assignments.map((a) => a.ip))
+        const startAt = await computeStartAt()
         startScenes(Number(trackIdx), startAt)
-        triggerSyncPlay(playlistId, Number(trackIdx), startAt, baseTime)
-        return `Playing playlist ${playlistId} (multi-PC master) @${startAt}`
+        triggerSyncPlay(assignments, startAt)
+        return `Playing playlist ${playlistId} (multi-PC master, mirror ${assignments.length}) @${startAt}`
       }
       startScenes(Number(trackIdx))
       return `Playing playlist ${playlistId} (scenes) from scene ${trackIdx}`

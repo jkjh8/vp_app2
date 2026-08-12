@@ -61,6 +61,11 @@ let pStatus = {
   // 멀티 윈도우(v3): 사용자 정의 출력 창 목록 (dbStatus에 영속). 각 창은 모니터/좌표/크기 배치.
   // { id, name, monitorIndex, x, y, width, height, aspectMode, backgroundColor }
   windows: [],
+  // 화면 구성 프리셋 (dbStatus 'windowPresets'에 영속). 현재 windows 배치를 이름 붙여 저장/복원.
+  // { id, name, windows: [...창 설정 스냅샷...], createdAt }
+  windowPresets: [],
+  // 현재 windows 배치와 일치하는 프리셋 id ('현재' 배지용). 직접 편집하면 null로 해제.
+  activePresetId: null,
   // 플레이어가 실제 보유한 창 목록 (get_windows/windows 피드백) — 사용자 설정(windows)과 구분
   playerWindows: [],
   // 창별 재생 상태 (창 동시 재생 — 창마다 독립 커서/활성 덱). { [windowId]: {trackId, activePlayerId, player} }
@@ -79,15 +84,32 @@ let pStatus = {
   // 플레이어 capabilities.features — 신규 명령 송신 게이트 (구버전 플레이어 = 빈 배열)
   playerFeatures: [],
   // 멀티 PC 클럭 동기 (v3 Phase 5). role standalone=단독(기본), master=주, slave=종.
-  // PTP(멀티캐스트) 클럭 + base_time 공유 + 멀티캐스트 start_at 트리거로 전 PC 락스텝 재생.
+  // PTP(멀티캐스트) 클럭 + base_time 공유 + 슬레이브별 유니캐스트 start_at 트리거로 전 PC 락스텝 재생.
   sync: {
-    role: 'standalone', // 'standalone' | 'master' | 'slave'
+    role: 'standalone', // 'standalone' | 'master' | 'slave' — 기본 standalone(독립)
     domain: 0, // PTP 도메인
-    peers: [], // master가 제어할 slave IP 목록
+    peers: [], // (예약) 수동 slave IP 목록 — v1은 자동 디스커버리만 사용
     multicastAddr: '239.255.42.99',
-    multicastPort: 15002,
+    multicastPort: 15002, // 재생 트리거(sync_play/ptp_base) 유니캐스트 수신 포트
     leadMs: 1000, // start_at = 현재 공유 러닝타임 + leadMs
     ptp: {}, // 로컬 플레이어 ptp_status (enabled/synced/base_time/running_time)
+    // 이 PC의 안정적 식별자 (dbStatus 'playerId'에 영속). 디스커버리 announce 키.
+    playerId: '',
+    // (master 전용) 자동 디스커버리로 발견한 슬레이브 목록.
+    // { [id]: {id,name,hostname,ip,restPort,role,version,playing,ptp,lastSeen,online} }
+    // socketio.js에서 통째 교체로 전송 (오프라인 좀비 키 방지)
+    discovered: {},
+    // (master 전용) 현재 구성된 쇼.
+    //  mode='mirror'      → 전 대상이 동일 playlist(mirrorPlaylistId) 재생·완전 락스텝(master가 장면 재트리거)
+    //  mode='distributed' → 대상별 다른 playlist(assignments[playerId]) 재생·시작만 동기(각자 자체 전환)
+    show: {
+      mode: 'mirror',
+      domain: 0,
+      leadMs: 1000,
+      mirrorPlaylistId: null, // mirror 모드에서 전 대상이 재생할 단일 playlist
+      mirrorTrackIdx: 0,
+      assignments: {}, // distributed: { [playerId]: { playlistId, trackIdx } } (master 자신 포함 가능)
+    },
   },
   // Phase B 타임라인 모드 (playlistMode와 상호배타)
   timelineMode: false,

@@ -22,8 +22,14 @@ import {
   deleteWindow,
   setPreloadConfig,
   setChannelDelays,
+  listPresets,
+  savePreset,
+  updatePreset,
+  renamePreset,
+  deletePreset,
+  applyPreset,
 } from '../../../api/player/windows.js'
-import { configureSync } from '../../../api/player/peerSync.js'
+import { configureSync, awaitRunningTime } from '../../../api/player/peerSync.js'
 import pStatus from '../../../pStatus.js'
 import { logger } from '../../../logger/index.js'
 
@@ -232,6 +238,57 @@ router.delete('/windows/:id', async (req, res) => {
   }
 })
 
+// --- 화면 구성 프리셋 -------------------------------------------------------
+router.get('/presets', (req, res) => {
+  res.status(200).json({ presets: listPresets() })
+})
+
+router.post('/presets', async (req, res) => {
+  try {
+    const preset = await savePreset(req.body?.name)
+    res.status(200).json({ preset })
+  } catch (error) {
+    logger.error('Error saving preset:', error)
+    res.status(500).json({ error: 'Failed to save preset' })
+  }
+})
+
+router.post('/presets/:id/apply', async (req, res) => {
+  try {
+    const preset = await applyPreset(req.params.id)
+    if (!preset) return res.status(404).json({ error: 'preset not found' })
+    res.status(200).json({ preset })
+  } catch (error) {
+    logger.error('Error applying preset:', error)
+    res.status(500).json({ error: 'Failed to apply preset' })
+  }
+})
+
+// 현재 배치를 기존 프리셋에 덮어쓰기
+router.put('/presets/:id', async (req, res) => {
+  try {
+    const preset =
+      req.body?.name !== undefined
+        ? await renamePreset(req.params.id, req.body.name)
+        : await updatePreset(req.params.id)
+    if (!preset) return res.status(404).json({ error: 'preset not found' })
+    res.status(200).json({ preset })
+  } catch (error) {
+    logger.error('Error updating preset:', error)
+    res.status(500).json({ error: 'Failed to update preset' })
+  }
+})
+
+router.delete('/presets/:id', async (req, res) => {
+  try {
+    await deletePreset(req.params.id)
+    res.status(200).json({ ok: true })
+  } catch (error) {
+    logger.error('Error deleting preset:', error)
+    res.status(500).json({ error: 'Failed to delete preset' })
+  }
+})
+
 router.put('/preload', async (req, res) => {
   try {
     const result = await setPreloadConfig(req.body || {})
@@ -265,6 +322,24 @@ router.put('/sync', async (req, res) => {
   } catch (error) {
     logger.error('Error configuring sync:', error)
     res.status(500).json({ error: 'Failed to configure sync' })
+  }
+})
+
+// 신선한 공유 러닝타임 스냅샷 (마스터 콘솔 오차 진단이 왕복 측정에 사용).
+// get_running_time 왕복으로 플레이어의 현재 PTP running_time/base_time을 갱신해 반환한다.
+router.get('/running_time', async (req, res) => {
+  try {
+    const rt = await awaitRunningTime()
+    const p = pStatus.sync.ptp || {}
+    res.status(200).json({
+      running_time: Number(rt),
+      base_time: Number(p.base_time),
+      synced: !!p.synced,
+      enabled: !!p.enabled,
+      at: Date.now(),
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
   }
 })
 
