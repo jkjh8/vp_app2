@@ -30,3 +30,7 @@ __pycache__
 vp_app.code-workspace
 
 yarn.lock
+
+# e2e/launcher temp artifacts
+scratchpad/fleet_test/
+scratchpad/two_pcs/
