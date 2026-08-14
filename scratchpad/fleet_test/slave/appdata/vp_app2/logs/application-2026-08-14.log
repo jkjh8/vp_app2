@@ -1,0 +1,40 @@
+2026-08-14 17:56:14 [debug]: Logger initialized 
+2026-08-14 17:56:14 [debug]: Media, logo, and tmp paths checked or created 
+2026-08-14 17:56:14 [debug]: Database initialized 
+2026-08-14 17:56:14 [debug]: Status updated from database 
+2026-08-14 17:56:14 [info]: media probe/thumbnail delegated to native player (GStreamer) 
+2026-08-14 17:56:14 [info]: Player exe: C:\Users\kjh\Desktop\DEV\vp_player\build\Release\vplayer.exe 
+2026-08-14 17:56:14 [info]: App path: C:\Users\kjh\Desktop\DEV\vp_app2 
+2026-08-14 17:56:14 [info]: Player started with PID: 9264 
+2026-08-14 17:56:14 [info]: Web server running at http://localhost:3211 
+2026-08-14 17:56:14 [info]: Simple TCP server listening on port 15000 
+2026-08-14 17:56:14 [info]: JSON TCP server listening on port 15001 
+2026-08-14 17:56:21 [info]: Player TCP port: 1300 
+2026-08-14 17:56:21 [info]: Connected to player on port 1300 
+2026-08-14 17:56:21 [info]: [Player] Player ready 
+2026-08-14 17:56:21 [info]: Player is ready 
+2026-08-14 17:56:21 [debug]: TCP response broadcasted to 0 clients: {"timestamp":"2026-08-14T08:56:21.671Z","success":true,"command":"event","message":"Event: playerReady","data":{"eventType":"playerReady"}} 
+2026-08-14 17:56:21 [info]: Initial player commands sent 
+2026-08-14 17:56:21 [info]: Player capabilities: channel_map, audio_track, live_routing, embedded_streams, display, timeline, multi_window, track_delay, memory_status, ptp_sync, net_clock, channel_delay, play_synced, preload_status, hwaccel, hw_only, master_volume 
+2026-08-14 17:56:21 [info]: Hardware acceleration: {"decode":"hardware","enabled":true,"mode":"on","render":"d3d11"} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"background_color","color":"#000000"} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_displays"} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_audio_devices"} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"logo_file","file":""} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"logo_size","size":0} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"show_logo","show":true} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"set_preload_config","lookahead":2,"max_decks":8} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_windows"} 
+2026-08-14 17:56:21 [info]: Command sent to player: {"command":"set_master_volume","volume":100} 
+2026-08-14 17:56:21 [info]: Displays updated: 2 monitors 
+2026-08-14 17:56:21 [info]: Background color set to: #000000 
+2026-08-14 17:56:21 [debug]: TCP response broadcasted to 0 clients: {"timestamp":"2026-08-14T08:56:21.944Z","success":true,"command":"event","message":"Event: audioDevicesUpdated","data":{"eventType":"audioDevicesUpdated","count":6}} 
+2026-08-14 17:56:21 [info]: Audio devices updated: 6 devices 
+2026-08-14 17:56:21 [debug]: [Player] preload config: lookahead=2 max_decks=8 
+2026-08-14 17:56:21 [info]: Player windows: 0 
+2026-08-14 17:56:21 [warn]: Unknown message type from player: set_master_volume 
+2026-08-14 17:56:24 [info]: peerSync configured: role=slave clock=netclock domain=0 
+2026-08-14 17:56:24 [info]: peerSync slave listening trigger on :15002 
+2026-08-14 17:56:24 [info]: discovery started (role=slave) on 239.255.42.100:15003 
+2026-08-14 17:56:24 [info]: Command sent to player: {"command":"enable_net_clock","role":"slave","address":"127.0.0.1","port":15004} 
+2026-08-14 17:56:32 [info]: Command sent to player: {"command":"get_running_time"} 

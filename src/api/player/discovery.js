@@ -29,15 +29,22 @@ let pruneTimer = null
 const emitDiscovered = () =>
   ioClient?.emit?.('pStatus', { sync: { discovered: pStatus.sync.discovered } })
 
-// 첫 비내부 IPv4 (announce의 접속 주소로 사용)
+// 라우팅 가능한 IPv4 (announce/넷클럭 접속 주소). 169.254.x(APIPA 링크로컬)는 후순위로 밀어
+// 실제 LAN 주소(예: 192.168.x)를 우선 선택 — 멀티 NIC 환경에서 슬레이브가 접속 못 하는 문제 방지.
 const primaryIpv4 = () => {
   const ifaces = os.networkInterfaces()
+  let apipa = null
   for (const name of Object.keys(ifaces)) {
     for (const ni of ifaces[name] || []) {
-      if (ni.family === 'IPv4' && !ni.internal) return ni.address
+      if (ni.family !== 'IPv4' || ni.internal) continue
+      if (ni.address.startsWith('169.254.')) {
+        apipa = apipa || ni.address
+        continue
+      }
+      return ni.address
     }
   }
-  return '127.0.0.1'
+  return apipa || '127.0.0.1'
 }
 
 // 이 PC의 안정적 식별자 확보 (없으면 생성·영속)
@@ -214,4 +221,4 @@ const refreshDiscovery = () => {
   if (pStatus.sync.role === 'master' && sock) sendProbe()
 }
 
-export { initDiscovery, restartDiscovery, stopDiscovery, refreshDiscovery, ensurePlayerId }
+export { initDiscovery, restartDiscovery, stopDiscovery, refreshDiscovery, ensurePlayerId, primaryIpv4 }

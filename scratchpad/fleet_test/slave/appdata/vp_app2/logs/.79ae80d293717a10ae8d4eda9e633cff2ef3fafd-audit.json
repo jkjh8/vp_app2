@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": false,
+        "amount": 30
+    },
+    "auditLog": "C:\\Users\\kjh\\Desktop\\DEV\\vp_app2\\scratchpad\\fleet_test\\slave\\appdata\\vp_app2\\logs\\.79ae80d293717a10ae8d4eda9e633cff2ef3fafd-audit.json",
+    "files": [
+        {
+            "date": 1786697774756,
+            "name": "C:\\Users\\kjh\\Desktop\\DEV\\vp_app2\\scratchpad\\fleet_test\\slave\\appdata\\vp_app2\\logs\\application-2026-08-14.log",
+            "hash": "f8bd4a29e2051cc0ab4541bdaabc3184a617caddc0d02c1d5cd028b7f791246b"
+        }
+    ],
+    "hashType": "sha256"
+}

@@ -1,0 +1,57 @@
+Log directory: C:\Users\kjh\Desktop\DEV\vp_app2\scratchpad\fleet_test\master\appdata\vp_app2\logs
+[34m2026-08-14 17:56:14 [debug]: Logger initialized [39m
+[34m2026-08-14 17:56:14 [debug]: Media, logo, and tmp paths checked or created [39m
+[34m2026-08-14 17:56:14 [debug]: Database initialized [39m
+[34m2026-08-14 17:56:14 [debug]: Status updated from database [39m
+[32m2026-08-14 17:56:14 [info]: media probe/thumbnail delegated to native player (GStreamer) [39m
+[32m2026-08-14 17:56:14 [info]: Player exe: C:\Users\kjh\Desktop\DEV\vp_player\build\Release\vplayer.exe [39m
+[32m2026-08-14 17:56:14 [info]: App path: C:\Users\kjh\Desktop\DEV\vp_app2 [39m
+[32m2026-08-14 17:56:14 [info]: Player started with PID: 26328 [39m
+[32m2026-08-14 17:56:14 [info]: Web server running at http://localhost:3210 [39m
+[31m2026-08-14 17:56:14 [error]: Simple TCP port 15000 is already in use. Trying alternative port... [39m
+[32m2026-08-14 17:56:14 [info]: Attempting to start Simple TCP server on port 15001 [39m
+[31m2026-08-14 17:56:14 [error]: JSON TCP port 15001 is already in use. Trying alternative port... [39m
+[32m2026-08-14 17:56:14 [info]: Attempting to start JSON TCP server on port 15002 [39m
+[0mGET /api/player/sync [32m200[0m 2.294 ms - 353[0m
+[31m2026-08-14 17:56:15 [error]: Simple TCP port 15001 is already in use. Trying alternative port... [39m
+[32m2026-08-14 17:56:15 [info]: Attempting to start Simple TCP server on port 15002 [39m
+[32m2026-08-14 17:56:15 [info]: JSON TCP server listening on port 15002 [39m
+[31m2026-08-14 17:56:16 [error]: Simple TCP port 15002 is already in use. Trying alternative port... [39m
+[32m2026-08-14 17:56:16 [info]: Attempting to start Simple TCP server on port 15003 [39m
+[32m2026-08-14 17:56:17 [info]: Simple TCP server listening on port 15003 [39m
+[32m2026-08-14 17:56:21 [info]: Player TCP port: 61794 [39m
+[32m2026-08-14 17:56:21 [info]: Connected to player on port 61794 [39m
+[32m2026-08-14 17:56:21 [info]: [Player] Player ready [39m
+[32m2026-08-14 17:56:21 [info]: Player is ready [39m
+[34m2026-08-14 17:56:21 [debug]: TCP response broadcasted to 0 clients: {"timestamp":"2026-08-14T08:56:21.717Z","success":true,"command":"event","message":"Event: playerReady","data":{"eventType":"playerReady"}} [39m
+[32m2026-08-14 17:56:21 [info]: Initial player commands sent [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"background_color","color":"#000000"} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_displays"} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_audio_devices"} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"logo_file","file":""} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"logo_size","size":0} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"show_logo","show":true} [39m
+[32m2026-08-14 17:56:21 [info]: Player capabilities: channel_map, audio_track, live_routing, embedded_streams, display, timeline, multi_window, track_delay, memory_status, ptp_sync, net_clock, channel_delay, play_synced, preload_status, hwaccel, hw_only, master_volume [39m
+[32m2026-08-14 17:56:21 [info]: Hardware acceleration: {"decode":"hardware","enabled":true,"mode":"on","render":"d3d11"} [39m
+[32m2026-08-14 17:56:21 [info]: Displays updated: 2 monitors [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"set_preload_config","lookahead":2,"max_decks":8} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"get_windows"} [39m
+[32m2026-08-14 17:56:21 [info]: Command sent to player: {"command":"set_master_volume","volume":100} [39m
+[32m2026-08-14 17:56:21 [info]: Background color set to: #000000 [39m
+[34m2026-08-14 17:56:21 [debug]: TCP response broadcasted to 0 clients: {"timestamp":"2026-08-14T08:56:21.954Z","success":true,"command":"event","message":"Event: audioDevicesUpdated","data":{"eventType":"audioDevicesUpdated","count":6}} [39m
+[32m2026-08-14 17:56:21 [info]: Audio devices updated: 6 devices [39m
+[34m2026-08-14 17:56:21 [debug]: [Player] preload config: lookahead=2 max_decks=8 [39m
+[32m2026-08-14 17:56:21 [info]: Player windows: 0 [39m
+[33m2026-08-14 17:56:21 [warn]: Unknown message type from player: set_master_volume [39m
+[32m2026-08-14 17:56:24 [info]: peerSync configured: role=master clock=netclock domain=0 [39m
+[32m2026-08-14 17:56:24 [info]: discovery started (role=master) on 239.255.42.100:15003 [39m
+[32m2026-08-14 17:56:24 [info]: Command sent to player: {"command":"enable_net_clock","role":"master","address":"","port":15004} [39m
+[0mPUT /api/player/sync [32m200[0m 2.713 ms - 353[0m
+[0mGET /api/fleet/players [32m200[0m 0.932 ms - 326[0m
+[0mGET /api/fleet/players/be40fb09-168d-4665-96fd-7c26b41582a0/api/player/sync [32m200[0m 3.712 ms - 476[0m
+[0mGET /api/player/sync [32m200[0m 0.305 ms - 832[0m
+[32m2026-08-14 17:56:32 [info]: Command sent to player: {"command":"get_running_time"} [39m
+[32m2026-08-14 17:56:32 [info]: Command sent to player: {"command":"get_running_time"} [39m
+[32m2026-08-14 17:56:32 [info]: Command sent to player: {"command":"get_running_time"} [39m
+[0mGET /api/fleet/diag [32m200[0m 3.770 ms - 320[0m
+[0mPOST /api/fleet/show [32m200[0m 1.296 ms - 102[0m

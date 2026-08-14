@@ -1,6 +1,6 @@
 {
   "name": "vp_app2",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "main": "src/main.js",
   "type": "module",
   "license": "MIT",

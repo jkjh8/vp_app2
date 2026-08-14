@@ -92,7 +92,12 @@ let pStatus = {
     multicastAddr: '239.255.42.99',
     multicastPort: 15002, // 재생 트리거(sync_play/ptp_base) 유니캐스트 수신 포트
     leadMs: 1000, // start_at = 현재 공유 러닝타임 + leadMs
-    ptp: {}, // 로컬 플레이어 ptp_status (enabled/synced/base_time/running_time)
+    // 클럭 소스 전략. 'auto'=하드웨어/네트워크 PTP 우선, 미동기 시 소프트웨어 넷클럭 폴백 /
+    //  'ptp'=PTP 강제(AES67/Dante GM에 슬레이브 or VP가 GM) / 'netclock'=소프트웨어 넷클럭(VP 마스터=클럭 마스터).
+    clockMode: 'auto',
+    netClockPort: 15004, // 넷클럭 UDP 포트 (master=NetTimeProvider / slave=NetClientClock)
+    netMasterIp: '', // (slave) 넷클럭 마스터 IP — master arm 시 프록시로 주입
+    ptp: {}, // 현재 클럭 상태 (ptp_status/net_clock_status): {enabled,synced,mode,base_time,running_time}
     // 이 PC의 안정적 식별자 (dbStatus 'playerId'에 영속). 디스커버리 announce 키.
     playerId: '',
     // (master 전용) 자동 디스커버리로 발견한 슬레이브 목록.

@@ -18,7 +18,10 @@ const ROOT = path.resolve(process.cwd())
 const GST_ROOT =
   process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 || 'C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64\\'
 const GST_BIN = path.join(GST_ROOT, 'bin')
-const PLAYER_EXE = path.resolve(ROOT, '../vp_player/build/Release/vplayer.exe')
+// TEST_PLAYER_EXE로 번들(dist) 플레이어를 지정하면 그 플레이어를 쓰고, 시스템 GStreamer를 PATH에
+// 넣지 않는다(자체 동봉 검증 — 시스템 헬퍼로 인한 위양성 방지).
+const PLAYER_EXE = process.env.TEST_PLAYER_EXE || path.resolve(ROOT, '../vp_player/build/Release/vplayer.exe')
+const IS_BUNDLE = !!process.env.TEST_PLAYER_EXE
 const PLUGIN_PATH = path.resolve(ROOT, '../vp_player/build/Release')
 const TMP = path.resolve(ROOT, 'scratchpad/fleet_test')
 
@@ -49,7 +52,7 @@ const startBackend = (inst) => {
     NODE_ENV: 'development',
     VP_PLAYER_EXE: PLAYER_EXE,
     GST_PLUGIN_PATH: PLUGIN_PATH,
-    PATH: GST_BIN + path.delimiter + process.env.PATH,
+    PATH: (IS_BUNDLE ? '' : GST_BIN + path.delimiter) + process.env.PATH,
   }
   const out = createWriteStream(path.join(TMP, inst.name + '.log'))
   const c = spawn(process.execPath, ['src/main.js'], { cwd: ROOT, env })
@@ -126,9 +129,16 @@ const main = async () => {
   console.log('both web servers up; waiting for players to spawn + connect...')
   await sleep(9000)
 
-  console.log('== set roles ==')
-  await jreq(base(A) + '/api/player/sync', 'PUT', { role: 'master', domain: 0 })
-  await jreq(base(B) + '/api/player/sync', 'PUT', { role: 'slave', domain: 0 })
+  const DOMAIN = Number(process.env.TEST_DOMAIN || 0)
+  const CLOCK = process.env.TEST_CLOCK || 'ptp' // 'ptp' | 'netclock'
+  console.log(`== set roles (clock=${CLOCK} domain ${DOMAIN}) ==`)
+  if (CLOCK === 'netclock') {
+    await jreq(base(A) + '/api/player/sync', 'PUT', { role: 'master', clockMode: 'netclock', netClockPort: 15004 })
+    await jreq(base(B) + '/api/player/sync', 'PUT', { role: 'slave', clockMode: 'netclock', netMasterIp: '127.0.0.1', netClockPort: 15004 })
+  } else {
+    await jreq(base(A) + '/api/player/sync', 'PUT', { role: 'master', clockMode: 'ptp', domain: DOMAIN })
+    await jreq(base(B) + '/api/player/sync', 'PUT', { role: 'slave', clockMode: 'ptp', domain: DOMAIN })
+  }
   console.log('roles set; waiting for discovery + PTP sync...')
   await sleep(8000)
 

@@ -136,12 +136,36 @@ const computeStartAt = async () => {
   return base + (pStatus.sync.leadMs || 1000) * 1e6 // ms → ns
 }
 
-// ── master: PTP / 트리거 배포 ───────────────────────────────────────────────
+// ── master: 클럭 / 트리거 배포 ───────────────────────────────────────────────
 const enablePtpLocal = (domain) => {
   playerSend({
     command: 'enable_ptp',
     domain: Number.isInteger(domain) ? domain : pStatus.sync.domain,
   })
+}
+
+// 소프트웨어 넷클럭 활성화 (role 'master'=시간 제공 / 'slave'=원격 동기).
+const enableNetClockLocal = (role, address, port) => {
+  playerSend({
+    command: 'enable_net_clock',
+    role: role === 'master' ? 'master' : 'slave',
+    address: address || '',
+    port: Number.isInteger(port) ? port : pStatus.sync.netClockPort || 15004,
+  })
+}
+
+// 이 PC의 로컬 플레이어에 "설정된 클럭"을 활성화. clockMode: 'ptp'|'netclock'|'auto'(→우선 PTP).
+// netclock slave인데 master IP 미설정이면 스킵(arm이 IP 주입 후 재호출).
+const enableClockLocal = (role = pStatus.sync.role) => {
+  const s = pStatus.sync
+  const mode = s.clockMode || 'auto'
+  if (mode === 'netclock') {
+    if (role === 'master') enableNetClockLocal('master', '', s.netClockPort)
+    else if (s.netMasterIp) enableNetClockLocal('slave', s.netMasterIp, s.netClockPort)
+    // else: master arm이 netMasterIp를 주입한 뒤 다시 호출
+  } else {
+    enablePtpLocal(s.domain) // ptp 또는 auto(우선 PTP — 미동기 시 fleet arm이 넷클럭으로 폴백)
+  }
 }
 
 // master: 자기 base_time 을 각 슬레이브에 1회 유니캐스트 → 전 PC 러닝타임 좌표 정렬.
@@ -174,7 +198,17 @@ const triggerSyncPlay = (assignments = [], startAt) => {
 }
 
 // ── 설정 / 부팅 ─────────────────────────────────────────────────────────────
-const CONFIG_KEYS = ['role', 'domain', 'multicastAddr', 'multicastPort', 'leadMs', 'peers']
+const CONFIG_KEYS = [
+  'role',
+  'domain',
+  'multicastAddr',
+  'multicastPort',
+  'leadMs',
+  'peers',
+  'clockMode',
+  'netClockPort',
+  'netMasterIp',
+]
 const persistSyncConfig = async () => {
   const cfg = {}
   for (const k of CONFIG_KEYS) cfg[k] = pStatus.sync[k]
@@ -192,13 +226,16 @@ const configureSync = async (cfg = {}) => {
   if (typeof cfg.multicastAddr === 'string') s.multicastAddr = cfg.multicastAddr
   if (Number.isInteger(cfg.multicastPort)) s.multicastPort = cfg.multicastPort
   if (Number.isInteger(cfg.leadMs)) s.leadMs = cfg.leadMs
+  if (['auto', 'ptp', 'netclock'].includes(cfg.clockMode)) s.clockMode = cfg.clockMode
+  if (Number.isInteger(cfg.netClockPort)) s.netClockPort = cfg.netClockPort
+  if (typeof cfg.netMasterIp === 'string') s.netMasterIp = cfg.netMasterIp
 
   await persistSyncConfig()
   setupTrigger()
   await restartDiscovery()
-  if (s.role !== 'standalone') enablePtpLocal(s.domain)
+  if (s.role !== 'standalone') enableClockLocal(s.role)
   emitSync()
-  logger.info(`peerSync configured: role=${s.role} domain=${s.domain}`)
+  logger.info(`peerSync configured: role=${s.role} clock=${s.clockMode} domain=${s.domain}`)
   return s
 }
 
@@ -224,4 +261,6 @@ export {
   triggerSyncPlay,
   distributeBaseTime,
   enablePtpLocal,
+  enableNetClockLocal,
+  enableClockLocal,
 }

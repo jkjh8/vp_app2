@@ -16,7 +16,7 @@ import pStatus from '../../../pStatus.js'
 import { logger } from '../../../logger/index.js'
 import { dbStatus } from '../../../db/index.js'
 import { ioClient } from '../../../web/index.js'
-import { refreshDiscovery } from '../../../api/player/discovery.js'
+import { refreshDiscovery, primaryIpv4 } from '../../../api/player/discovery.js'
 import { stop } from '../../../api/player/index.js'
 import {
   computeStartAt,
@@ -24,6 +24,7 @@ import {
   triggerSyncPlay,
   distributeBaseTime,
   enablePtpLocal,
+  enableNetClockLocal,
 } from '../../../api/player/peerSync.js'
 
 const router = express.Router()
@@ -139,18 +140,30 @@ router.post('/show', async (req, res) => {
   res.json(s)
 })
 
-// ── PTP arm : 동기 완료 대기(best-effort) → base_time 배포 ─────────────────────
-const waitPtpSynced = async (targets, timeoutMs) => {
+// 로컬(master) 클럭 동기 대기
+const waitLocalSynced = async (timeoutMs) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeoutMs) {
+    await awaitRunningTime()
+    if (pStatus.sync.ptp?.synced) return true
+    await sleep(300)
+  }
+  return false
+}
+
+// ── 클럭 동기 완료 대기(best-effort) — master + 각 slave의 신선한 상태 폴링 ─────────
+const waitClockSynced = async (targets, timeoutMs) => {
   const startT = Date.now()
   while (Date.now() - startT < timeoutMs) {
-    await awaitRunningTime() // master ptp(synced/base_time/running_time) 갱신
+    await awaitRunningTime() // master 상태 갱신
     const masterSynced = !!pStatus.sync.ptp?.synced
     let slavesSynced = true
     if (masterSynced && targets.length) {
+      // /running_time 은 슬레이브에서 get_running_time 왕복으로 신선한 synced를 반환(캐시 아님)
       const checks = await Promise.all(
         targets.map((t) =>
-          slaveRest(t.player, 'GET', '/api/player/sync')
-            .then((s) => !!s?.ptp?.synced)
+          slaveRest(t.player, 'GET', '/api/player/running_time')
+            .then((s) => !!s?.synced)
             .catch(() => false),
         ),
       )
@@ -159,8 +172,54 @@ const waitPtpSynced = async (targets, timeoutMs) => {
     if (masterSynced && slavesSynced) return true
     await sleep(300)
   }
-  logger.warn('fleet arm: PTP not fully synced within timeout — proceeding best-effort')
+  logger.warn('fleet arm: clock not fully synced within timeout — proceeding best-effort')
   return false
+}
+
+// 클럭 전략 적용. auto=HW/네트워크 PTP 우선(동기 시 채택), 미동기면 소프트웨어 넷클럭으로 폴백.
+// netclock=이 PC가 클럭 마스터(NetTimeProvider), slaves는 client. ptp=PTP 강제.
+const armClock = async (targets) => {
+  const mode = pStatus.sync.clockMode || 'auto'
+  const domain = pStatus.sync.domain
+  const port = pStatus.sync.netClockPort || 15004
+  const masterIp = primaryIpv4()
+  const setSlaves = (body) =>
+    Promise.all(
+      targets.map((t) =>
+        slaveRest(t.player, 'PUT', '/api/player/sync', body).catch((e) =>
+          logger.warn(`arm: slave ${t.player.ip} clock set failed: ${e.message}`),
+        ),
+      ),
+    )
+  const armPtp = async () => {
+    enablePtpLocal(domain)
+    await setSlaves({ clockMode: 'ptp', domain })
+  }
+  const armNet = async () => {
+    enableNetClockLocal('master', '', port) // 이 PC = 클럭 마스터
+    await setSlaves({ clockMode: 'netclock', netMasterIp: masterIp, netClockPort: port })
+  }
+
+  if (mode === 'netclock') {
+    await armNet()
+    await waitClockSynced(targets, 5000)
+    return 'netclock'
+  }
+  if (mode === 'ptp') {
+    await armPtp()
+    await waitClockSynced(targets, 5000)
+    return 'ptp'
+  }
+  // auto: 먼저 하드웨어/네트워크 PTP 시도
+  await armPtp()
+  if (await waitLocalSynced(4000)) {
+    await waitClockSynced(targets, 4000)
+    return 'ptp'
+  }
+  logger.info('fleet arm: HW/network PTP 미동기 → 소프트웨어 넷클럭 폴백')
+  await armNet()
+  await waitClockSynced(targets, 5000)
+  return 'netclock'
 }
 
 const armAndPlayShow = async () => {
@@ -185,20 +244,11 @@ const armAndPlayShow = async () => {
 
   const advanceMode = show.mode === 'distributed' ? 'self' : 'master'
 
-  // 1. PTP 켜기 (master 로컬 + 각 slave)
-  enablePtpLocal(domain)
-  await Promise.all(
-    targets.map((t) =>
-      slaveRest(t.player, 'PUT', '/api/player/sync', { role: 'slave', domain }).catch((e) =>
-        logger.warn(`arm: slave ${t.player.ip} enable_ptp failed: ${e.message}`),
-      ),
-    ),
-  )
+  // 1~2. 클럭 확보 (auto=HW PTP 우선→넷클럭 폴백 / ptp / netclock) + 동기 완료 대기
+  const clockUsed = await armClock(targets)
+  logger.info(`fleet arm: clock=${clockUsed}`)
 
-  // 2. 동기 완료 대기 (best-effort)
-  await waitPtpSynced(targets, 5000)
-
-  // 3. base_time 1회 배포
+  // 3. base_time 1회 배포 (PTP·넷클럭 공용 — 전 PC 러닝타임 좌표 정렬)
   distributeBaseTime(targets.map((t) => t.player.ip))
 
   // 4. 공유 start_at 계산
@@ -227,7 +277,7 @@ const armAndPlayShow = async () => {
     local = `playlist ${masterAsg.playlistId}`
   }
 
-  return { ok: true, mode: show.mode, startAt, slaves: assignments.length, local }
+  return { ok: true, mode: show.mode, clock: clockUsed, startAt, slaves: assignments.length, local }
 }
 
 router.post('/show/play', async (req, res) => {

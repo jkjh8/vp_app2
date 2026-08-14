@@ -474,11 +474,15 @@ const parsePlayerStatus = async (data) => {
         if (pStatus.playerFeatures.includes('master_volume')) {
           playerSend({ command: 'set_master_volume', volume: pStatus.masterVolume })
         }
-        // 멀티 PC 동기(v3): slave/master 역할이면 플레이어 준비 시점에 PTP를 켠다.
-        // (role 설정/부팅 시점엔 플레이어 미연결이라 enable_ptp가 유실될 수 있어 여기서 확정 발신.)
-        if (pStatus.sync?.role !== 'standalone' && pStatus.playerFeatures.includes('ptp_sync')) {
-          import('../api/player/peerSync.js').then(({ enablePtpLocal }) =>
-            enablePtpLocal(pStatus.sync.domain),
+        // 멀티 PC 동기(v3): slave/master 역할이면 플레이어 준비 시점에 설정된 클럭(PTP/넷클럭)을 켠다.
+        // (role 설정/부팅 시점엔 플레이어 미연결이라 명령이 유실될 수 있어 여기서 확정 발신.)
+        if (
+          pStatus.sync?.role !== 'standalone' &&
+          (pStatus.playerFeatures.includes('ptp_sync') ||
+            pStatus.playerFeatures.includes('net_clock'))
+        ) {
+          import('../api/player/peerSync.js').then(({ enableClockLocal }) =>
+            enableClockLocal(pStatus.sync.role),
           )
         }
         break
@@ -541,8 +545,9 @@ const parsePlayerStatus = async (data) => {
         ioClient.emit('pStatus', { memory: pStatus.memory })
         break
 
-      // 멀티 PC PTP 동기 상태(v3 Phase 5): enable_ptp/ptp_base_time/get_running_time 응답.
+      // 멀티 PC 클럭 동기(v3 Phase 5): enable_ptp/enable_net_clock/ptp_base_time/get_running_time 응답.
       case 'ptp_status':
+      case 'net_clock_status':
       case 'running_time': {
         const { onPtpStatus } = await import('../api/player/peerSync.js')
         onPtpStatus(msgData)
