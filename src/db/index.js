@@ -8,6 +8,7 @@ let dbFiles = null
 let dbFolders = null
 let dbPlaylists = null
 let dbTimelines = null
+let dbSources = null
 
 const addTimestamps = (store) => {
   const originalInsert = store.insert
@@ -67,13 +68,21 @@ const initDb = () => {
         autoload: true,
       }),
     ),
+    // 라이브 입력 소스 (RTP/RTSP/SRT) — 파일과 별개 축. 창에 귀속해 지속 재생.
+    sources: addTimestamps(
+      Datastore.create({
+        filename: path.join(dbPath, 'sources.db'),
+        autoload: true,
+      }),
+    ),
   }
   dbStatus = db.status
   dbFiles = db.files
   dbFolders = db.folders
   dbPlaylists = db.playlists
   dbTimelines = db.timelines
+  dbSources = db.sources
   return db
 }
-export { initDb, dbStatus, dbFiles, dbFolders, dbPlaylists, dbTimelines }
+export { initDb, dbStatus, dbFiles, dbFolders, dbPlaylists, dbTimelines, dbSources }
 export default db

@@ -19,6 +19,8 @@ let pStatus = {
   webPort: Number(process.env.VP_WEB_PORT) || 3000,
   startOnPlay: false,
   startOnPlaylistId: null,
+  // Windows 시작 시 앱 자동 실행 (작업 스케줄러 "VP App"). 사용자 의도 영속값 — api/system/autostart.js.
+  autoStart: false,
   audioDevices: [],
   audioDevice: '',
   // 하드웨어 가속: 'auto' | 'on' | 'off' | 'hwonly' (기동 시 VP_HWACCEL env로 전달, 변경 시 재시작).
@@ -32,10 +34,6 @@ let pStatus = {
   masterVolume: 100,
   // 출력 채널별 오디오 지연(ms) — 스피커 동기 보정 (믹서 출력에 적용, 임베디드+오디오트랙 공통)
   channelDelays: [],
-  logoFile: '',
-  logoShow: true, // 사용자 선호값 (show_logo 커맨드로 설정)
-  logoVisible: false, // 실제 화면 표시 여부 (logo_visibility 피드백, §2.7 자동 규칙 반영 결과)
-  logoSize: 0,
   file: {},
   player: {
     event: '',
@@ -59,7 +57,8 @@ let pStatus = {
   },
   displays: [], // get_displays 피드백으로 채워지는 현재 감지된 모니터 목록
   // 멀티 윈도우(v3): 사용자 정의 출력 창 목록 (dbStatus에 영속). 각 창은 모니터/좌표/크기 배치.
-  // { id, name, monitorIndex, x, y, width, height, aspectMode, backgroundColor }
+  // { id, name, monitorIndex, x, y, width, height, aspectMode, backgroundColor, sourceId }
+  // sourceId: 창에 귀속된 라이브 입력 소스(dbSources) — 있으면 플레이리스트와 무관한 지속 레이어.
   windows: [],
   // 화면 구성 프리셋 (dbStatus 'windowPresets'에 영속). 현재 windows 배치를 이름 붙여 저장/복원.
   // { id, name, windows: [...창 설정 스냅샷...], createdAt }
@@ -83,6 +82,10 @@ let pStatus = {
   audioTracks: {},
   // 플레이어 capabilities.features — 신규 명령 송신 게이트 (구버전 플레이어 = 빈 배열)
   playerFeatures: [],
+  // 라이브 입력 소스(RTP/RTSP/SRT) 창별 연결 상태 (source_status 피드백).
+  // { [windowId]: {kind, state:'connecting'|'playing'|'reconnecting'|'error', reason, at} }
+  // socketio.js에서 통째 교체로 전송 (cleared 시 키 삭제 = 좀비 방지)
+  sourceStates: {},
   // 멀티 PC 클럭 동기 (v3 Phase 5). role standalone=단독(기본), master=주, slave=종.
   // PTP(멀티캐스트) 클럭 + base_time 공유 + 슬레이브별 유니캐스트 start_at 트리거로 전 PC 락스텝 재생.
   sync: {

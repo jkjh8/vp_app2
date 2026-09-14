@@ -1,7 +1,7 @@
-// Phase 2 배포 번들 생성: Electron 제거 → node.exe + 단일 server.cjs.
+// Phase 2 배포 번들 생성: Electron 제거 → VPApp.exe + 단일 server.cjs.
 //
 // 산출물 dist-node/:
-//   node.exe          stock Node 런타임 (현재 실행 중인 node 복사)
+//   VPApp.exe         stock Node 런타임 복사본 + 앱 브랜드 리소스(아이콘/버전정보) 스탬프(rcedit)
 //   server.cjs        전 의존성 번들 (esbuild)
 //   public/spa/       vp_ui 빌드 결과 (기존 위치에서 복사)
 //   player/           vp_player 네이티브 번들 (vplayer.exe + gst + licenses/)
@@ -13,7 +13,7 @@
 // 사용법: node scripts/build-node.mjs
 
 import { build } from 'esbuild'
-import { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, statSync } from 'node:fs'
+import { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, statSync, readFileSync } from 'node:fs'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +21,11 @@ import { collectNpmLicenses } from './collect-licenses.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'dist-node')
+const pkgVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+
+// 배포 실행 파일 이름 — stock node.exe를 이 이름으로 복사 후 버전정보/아이콘을 앱 브랜드로 스탬프.
+// (방화벽 대화상자·목록·작업관리자에 "Node.js" 대신 앱 이름/아이콘이 표시되도록)
+const EXE_NAME = 'VPApp.exe'
 
 // --- 1. 클린 ------------------------------------------------------------------
 if (existsSync(out)) rmSync(out, { recursive: true, force: true })
@@ -42,8 +47,32 @@ await build({
   logLevel: 'info',
 })
 
-// --- 3. node.exe (현재 런타임 복사) --------------------------------------------
-cpSync(process.execPath, path.join(out, 'node.exe'))
+// --- 3. VPApp.exe (현재 node 런타임 복사 + 브랜드 리소스 스탬프) ----------------
+const exePath = path.join(out, EXE_NAME)
+cpSync(process.execPath, exePath)
+// rcedit로 버전정보(FileDescription 등)와 아이콘을 앱 브랜드로 교체. 미설치 시 경고 후 스킵.
+// 참고: stock node.exe의 Authenticode 서명은 리소스 편집으로 무효화됨(어차피 미서명 배포).
+try {
+  const { rcedit } = await import('rcedit')
+  await rcedit(exePath, {
+    'version-string': {
+      FileDescription: 'VP App',
+      ProductName: 'VP App',
+      CompanyName: 'TechData',
+      LegalCopyright: '© TechData',
+      OriginalFilename: EXE_NAME,
+      InternalName: 'VPApp',
+    },
+    'file-version': pkgVersion,
+    'product-version': pkgVersion,
+    icon: path.join(root, 'public', 'icons', 'icon.ico'),
+  })
+  console.log(`  ${EXE_NAME}: 브랜드 리소스 스탬프 완료 (아이콘 + 버전정보)`)
+} catch (e) {
+  console.warn(
+    `WARN: ${EXE_NAME} 리브랜딩 건너뜀 (${e.message}). 브랜딩하려면 npm i 후 다시 빌드하세요 (rcedit).`,
+  )
+}
 
 // --- 4. SPA (vp_ui 빌드 결과) --------------------------------------------------
 const spaSrc = path.join(root, 'public', 'spa')
@@ -102,7 +131,7 @@ writeFileSync(
     'setlocal',
     'set VP_APP_ROOT=%~dp0',
     'set PATH=%~dp0player;%PATH%',
-    '"%~dp0node.exe" "%~dp0server.cjs"',
+    `"%~dp0${EXE_NAME}" "%~dp0server.cjs"`,
   ].join('\r\n') + '\r\n',
 )
 
@@ -114,7 +143,7 @@ writeFileSync(
     'appRoot = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\\"))',
     'sh.Environment("PROCESS")("VP_APP_ROOT") = appRoot',
     'sh.CurrentDirectory = appRoot',
-    "sh.Run \"\"\"\" & appRoot & \"node.exe\"\" \"\"\" & appRoot & \"server.cjs\"\"\", 0, False",
+    "sh.Run \"\"\"\" & appRoot & \"" + EXE_NAME + "\"\" \"\"\" & appRoot & \"server.cjs\"\"\", 0, False",
   ].join('\r\n') + '\r\n',
 )
 
@@ -133,7 +162,7 @@ const dirSizeMB = (p) => {
 }
 console.log(`\n=== dist-node 완성: ${out} ===`)
 console.log(`total: ${dirSizeMB(out)} MB`)
-for (const name of ['node.exe', 'server.cjs']) {
+for (const name of [EXE_NAME, 'server.cjs']) {
   const fp = path.join(out, name)
   if (existsSync(fp)) console.log(`  ${name}: ${(statSync(fp).size / 1048576).toFixed(1)} MB`)
 }

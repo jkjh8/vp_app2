@@ -1,11 +1,10 @@
-import path from 'path'
 import { logger } from '../../logger/index.js'
 import pStatus from '../../pStatus.js'
 import { dbStatus, dbFiles } from '../../db/index.js'
-import { getLogoPath } from '../files/folders.js'
 import { playerSend, restartPlayer } from '../../player/index.js'
 import { io, ioClient } from '../../web/index.js'
 import { setPlaylistMode } from '../playlists/index.js'
+import { applyBackgroundToAll } from './windows.js'
 import {
   stopAllTrackAudios,
   pauseTrackAudios,
@@ -267,47 +266,9 @@ const setFullscreen = async (value) => {
   return `Fullscreen mode set`
 }
 
-const setLogoFile = async (logo) => {
-  const filePath = path.join(getLogoPath(), logo)
-  pStatus.logoFile = filePath
-  await dbStatus.update(
-    { type: 'logoFile' },
-    { $set: { file: filePath } },
-    { upsert: true },
-  )
-  playerSend({ command: 'logo_file', file: filePath })
-  playerSend({ command: 'logo_size', size: pStatus.logoSize })
-  ioClient.emit('pStatus', { logoFile: pStatus.logoFile })
-  return `Logo set to: ${logo}`
-}
-
-const showLogo = async (show) => {
-  pStatus.logoShow = show
-  await dbStatus.update(
-    { type: 'logoShow' },
-    { $set: { value: show } },
-    { upsert: true },
-  )
-  playerSend({ command: 'show_logo', show })
-  ioClient.emit('pStatus', { logoShow: pStatus.logoShow })
-  return `Logo visibility set to: ${show}`
-}
-
-const setLogoSize = async (size) => {
-  pStatus.logoSize = size
-  await dbStatus.update(
-    { type: 'logoSize' },
-    { $set: { value: size } },
-    { upsert: true },
-  )
-  playerSend({ command: 'logo_size', size: pStatus.logoSize })
-  ioClient.emit('pStatus', { logoSize: pStatus.logoSize })
-  return `Logo size set to: ${size}`
-}
-
 const setBackground = async (background) => {
   if (!background || typeof background !== 'string') {
-    logger.warn('Received invalid background color from Python')
+    logger.warn('Received invalid background color')
     return
   }
   pStatus.backgroundColor = background
@@ -316,7 +277,9 @@ const setBackground = async (background) => {
     { $set: { value: background } },
     { upsert: true },
   )
-  playerSend({ command: 'background_color', color: background })
+  // 전역 배경색은 모든 출력 창에 적용(+창별 설정 갱신). 기존엔 window_id 없이 한 번만 보내
+  // 기본 창 하나에만 칠해졌다. (멀티 윈도우 전체 반영 — windows.applyBackgroundToAll)
+  await applyBackgroundToAll(background)
   ioClient.emit('pStatus', { backgroundColor: pStatus.backgroundColor })
   return `Background set to: ${background}`
 }
@@ -483,9 +446,6 @@ export {
   pause,
   updateTime,
   setFullscreen,
-  setLogoFile,
-  showLogo,
-  setLogoSize,
   setBackground,
   getAudioDevices,
   setAudioDevice,

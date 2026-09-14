@@ -233,7 +233,12 @@ const configureSync = async (cfg = {}) => {
   await persistSyncConfig()
   setupTrigger()
   await restartDiscovery()
-  if (s.role !== 'standalone') enableClockLocal(s.role)
+  // 설정 변경 시 헬스 모니터 재시작(폴백 결정도 리셋). standalone이면 중지.
+  stopClockHealth()
+  if (s.role !== 'standalone') {
+    enableClockLocal(s.role)
+    startClockHealth()
+  }
   emitSync()
   logger.info(`peerSync configured: role=${s.role} clock=${s.clockMode} domain=${s.domain}`)
   return s
@@ -252,6 +257,72 @@ const onPtpStatus = (data) => {
   emitSync()
 }
 
+// ── PTP/클럭 주기 헬스체크 (자가복구) ────────────────────────────────────────
+// 무인 사이니지 특성상, 부팅 시 한 번 enable 만으로는 PTP 락 실패·클럭 드롭을 방치하게 된다.
+// 5초마다 현재 클럭 상태(pStatus.sync.ptp.synced)를 점검해 미동기면 자동 복구한다:
+//   1) 동일 모드로 재-enable (락 재시도)
+//   2) clockMode='auto' 인데 PTP 가 연속 실패하면 넷클럭으로 폴백(fellBack) — 이후 넷클럭 유지
+// 매 틱 get_running_time 을 보내 다음 틱용 최신 상태를 받아온다(→ SPA 인디케이터도 5초 갱신).
+const HEALTH_INTERVAL_MS = 5000
+const PTP_FAIL_FALLBACK = 3 // auto 모드에서 PTP 미동기 연속 N틱(≈15s) → 넷클럭 폴백
+let healthTimer = null
+let unsyncedTicks = 0
+let fellBack = false // auto 모드에서 넷클럭으로 폴백했는지 (재무장/재설정 시 리셋)
+
+const hasClockFeature = () =>
+  (pStatus.playerFeatures || []).some((f) => f === 'ptp_sync' || f === 'net_clock')
+
+// 미동기 복구 시도. 폴백(또는 netclock 고정)이면 넷클럭으로, 아니면 PTP 재시도(+auto 폴백 판정).
+const recoverClock = () => {
+  const s = pStatus.sync
+  const useNet = s.clockMode === 'netclock' || fellBack
+  if (useNet) {
+    if (s.role === 'master') enableNetClockLocal('master', '', s.netClockPort)
+    else if (s.netMasterIp) enableNetClockLocal('slave', s.netMasterIp, s.netClockPort)
+    else enablePtpLocal(s.domain) // 넷클럭 slave인데 master IP 미확보 → 임시 PTP 재시도
+    return
+  }
+  enablePtpLocal(s.domain) // 동일 모드(PTP/auto) 재시도
+  if ((s.clockMode || 'auto') === 'auto' && unsyncedTicks >= PTP_FAIL_FALLBACK) {
+    fellBack = true
+    logger.warn(`clock health: PTP unsynced ${unsyncedTicks} ticks — falling back to net clock`)
+    if (s.role === 'master') enableNetClockLocal('master', '', s.netClockPort)
+    else if (s.netMasterIp) enableNetClockLocal('slave', s.netMasterIp, s.netClockPort)
+  }
+}
+
+const clockHealthTick = () => {
+  const s = pStatus.sync
+  if (!s || s.role === 'standalone' || !hasClockFeature()) return
+  const ptp = s.ptp || {}
+  if (ptp.synced) {
+    if (unsyncedTicks > 0) logger.info(`clock health: re-synced (mode=${ptp.mode || '?'})`)
+    unsyncedTicks = 0
+  } else {
+    unsyncedTicks++
+    logger.warn(
+      `clock health: unsynced (mode=${ptp.mode || '?'}, enabled=${!!ptp.enabled}, streak=${unsyncedTicks}) — recovering`,
+    )
+    recoverClock()
+  }
+  playerSend({ command: 'get_running_time' }) // 다음 틱용 최신 상태 요청 (onPtpStatus로 갱신)
+}
+
+const startClockHealth = () => {
+  if (healthTimer || pStatus.sync.role === 'standalone') return
+  unsyncedTicks = 0
+  fellBack = false
+  healthTimer = setInterval(clockHealthTick, HEALTH_INTERVAL_MS)
+  logger.info(`peerSync clock health monitor started (interval ${HEALTH_INTERVAL_MS}ms)`)
+}
+
+const stopClockHealth = () => {
+  if (!healthTimer) return
+  clearInterval(healthTimer)
+  healthTimer = null
+  logger.info('peerSync clock health monitor stopped')
+}
+
 export {
   configureSync,
   initSync,
@@ -263,4 +334,6 @@ export {
   enablePtpLocal,
   enableNetClockLocal,
   enableClockLocal,
+  startClockHealth,
+  stopClockHealth,
 }

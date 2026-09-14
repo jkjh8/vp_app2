@@ -8,6 +8,7 @@ import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
 import { playerSend } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
+import { getSource, toEngineSource } from './sources.js'
 
 const persistWindows = async () => {
   await dbStatus.update(
@@ -67,12 +68,62 @@ const normalize = (cfg = {}, id) => ({
   aspectMode: cfg.aspectMode || 'letterbox',
   backgroundColor: cfg.backgroundColor || '#000000',
   zOrder: Number.isInteger(cfg.zOrder) ? cfg.zOrder : 0, // 겹칠 때 쌓임 순서 (클수록 앞)
+  // 창에 귀속된 라이브 입력 소스 id (dbSources) — 있으면 지속 레이어. 프리셋 스냅샷에 함께 담김.
+  sourceId: cfg.sourceId ? String(cfg.sourceId) : null,
 })
+
+// 창에 귀속된 라이브 소스를 플레이어에 적용(set_window_source) 또는 해제(clear_window_source).
+// 플레이어 미지원(live_source 미표시) 시 무해(호스트가 명령을 보내도 됨 — 게이트는 복원 경로에만).
+const applyWindowSource = async (win) => {
+  if (!win) return
+  if (win.sourceId) {
+    const src = await getSource(win.sourceId)
+    if (src) playerSend({ command: 'set_window_source', window_id: win.id, source: toEngineSource(src) })
+    else playerSend({ command: 'clear_window_source', window_id: win.id })
+  } else {
+    playerSend({ command: 'clear_window_source', window_id: win.id })
+  }
+}
+
+// 소스 편집 시 그 소스를 귀속한 모든 창을 라이브 재적용.
+const reapplySource = async (sourceId) => {
+  for (const w of pStatus.windows || []) if (w.sourceId === sourceId) await applyWindowSource(w)
+}
+
+// 소스 삭제 시 그 소스를 귀속한 창의 귀속을 해제(+영속) + 플레이어 clear.
+const detachSource = async (sourceId) => {
+  let changed = false
+  for (const w of pStatus.windows || []) {
+    if (w.sourceId === sourceId) {
+      w.sourceId = null
+      changed = true
+      playerSend({ command: 'clear_window_source', window_id: w.id })
+    }
+  }
+  if (changed) await persistWindows()
+}
 
 const listWindows = () => ({
   windows: pStatus.windows || [],
   playerWindows: pStatus.playerWindows || [],
 })
+
+// 전역 배경색(설정 화면) — 모든 출력 창에 적용하고 각 창의 backgroundColor도 갱신(영속)한다.
+// setBackground(api/player)이 window_id 없이 보내면 플레이어는 기본 창 하나에만 칠하므로, 여기서
+// 창별로 명령을 보내야 멀티 윈도우 전체가 바뀌고 재시작(창 복원) 후에도 유지된다.
+// 창이 하나도 없으면 플레이어 기본 창에 전역 명령만 보낸다(무해).
+const applyBackgroundToAll = async (color) => {
+  const wins = pStatus.windows || []
+  if (!wins.length) {
+    playerSend({ command: 'background_color', color })
+    return
+  }
+  for (const w of wins) {
+    w.backgroundColor = color
+    playerSend({ command: 'background_color', window_id: w.id, color })
+  }
+  await persistWindows()
+}
 
 const createWindow = async (cfg = {}) => {
   const id = Number.isInteger(cfg.id) ? cfg.id : nextWindowId()
@@ -97,6 +148,7 @@ const createWindow = async (cfg = {}) => {
   if (win.backgroundColor)
     playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
   playerSend({ command: 'get_windows' })
+  if (win.sourceId) await applyWindowSource(win) // 라이브 소스 귀속 시 지속 레이어 부착
   await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   logger.info(`Window config created: ${id} (${win.name})`)
   return win
@@ -123,6 +175,7 @@ const updateWindow = async (id, patch = {}) => {
   })
   if (patch.backgroundColor)
     playerSend({ command: 'background_color', window_id: id, color: win.backgroundColor })
+  if ('sourceId' in patch) await applyWindowSource(win) // 라이브 소스 귀속 변경(설정/해제) 반영
   await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   return win
 }
@@ -268,6 +321,8 @@ const applyPreset = async (id) => {
       playerSend({ command: 'background_color', window_id: win.id, color: win.backgroundColor })
   }
   playerSend({ command: 'get_windows' })
+  // 프리셋 스냅샷에 담긴 창별 라이브 소스 귀속을 재부착 (배치+소스가 함께 전환됨)
+  for (const win of next) if (win.sourceId) await applyWindowSource(win)
   await setActivePreset(preset.id) // 적용 = 현재 배치가 이 프리셋
   logger.info(`Window preset applied: ${preset.id} (${preset.name}) — ${next.length} windows`)
   return preset
@@ -275,6 +330,7 @@ const applyPreset = async (id) => {
 
 export {
   listWindows,
+  applyBackgroundToAll,
   createWindow,
   updateWindow,
   deleteWindow,
@@ -286,4 +342,7 @@ export {
   renamePreset,
   deletePreset,
   applyPreset,
+  applyWindowSource,
+  reapplySource,
+  detachSource,
 }

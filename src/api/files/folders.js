@@ -9,10 +9,6 @@ function getTmpPath() {
   return path.join(app.getPath('userData'), 'tmp')
 }
 
-function getLogoPath() {
-  return path.join(getMediaPath(), 'logo')
-}
-
 function existsMediaPath() {
   const mediaPath = getMediaPath()
   if (!fs.existsSync(mediaPath)) {
@@ -27,14 +23,6 @@ function existsTmpPath() {
     fs.mkdirSync(tmpPath, { recursive: true })
   }
   return tmpPath
-}
-
-function existsLogoPath() {
-  const logoPath = getLogoPath()
-  if (!fs.existsSync(logoPath)) {
-    fs.mkdirSync(logoPath, { recursive: true })
-  }
-  return logoPath
 }
 
 function deleteTmpFiles() {
@@ -53,9 +41,7 @@ function deleteTmpFiles() {
 export {
   getMediaPath,
   getTmpPath,
-  getLogoPath,
   existsMediaPath,
   existsTmpPath,
-  existsLogoPath,
   deleteTmpFiles,
 }

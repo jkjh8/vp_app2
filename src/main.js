@@ -1,11 +1,10 @@
 import { app, onShutdown } from './runtime.js'
 import { initLogger, logger } from './logger/index.js'
 import { initDb } from './db/index.js'
-import { updateStatusFromDb } from './api/status/index.js'
+import { updateStatusFromDb, cleanupLegacyStatus } from './api/status/index.js'
 import { initWebServer } from './web/index.js'
 import { setupFFmpeg } from './api/files/index.js'
 import {
-  existsLogoPath,
   existsMediaPath,
   existsTmpPath,
 } from './api/files/folders.js'
@@ -28,11 +27,11 @@ if (!gotTheLock) {
     initLogger()
     logger.debug('Logger initialized')
     existsMediaPath()
-    existsLogoPath()
     existsTmpPath()
-    logger.debug('Media, logo, and tmp paths checked or created')
+    logger.debug('Media and tmp paths checked or created')
     initDb()
     logger.debug('Database initialized')
+    await cleanupLegacyStatus() // 폐기된 로고 status 레코드/폴더 1회 정리 (updateStatusFromDb 경고 방지)
     await updateStatusFromDb()
     logger.debug('Status updated from database')
     initSync() // 멀티 PC 동기 설정 복원 (role!=standalone이면 트리거 소켓 구성)

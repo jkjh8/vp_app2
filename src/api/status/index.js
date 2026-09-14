@@ -1,6 +1,35 @@
+import path from 'path'
+import fs from 'fs'
 import { dbStatus } from '../../db/index.js'
 import pStatus from '../../pStatus.js'
 import { logger } from '../../logger/index.js'
+import { getMediaPath } from '../files/folders.js'
+
+// 기능 삭제로 더 이상 읽지 않는 폐기 status 레코드 (이후 다른 키가 폐기되면 여기에 추가).
+// 남겨두면 updateStatusFromDb의 default 케이스가 매 부팅 "Unknown status type" 경고를 낸다.
+const OBSOLETE_STATUS_TYPES = ['logoFile', 'logoShow', 'logoSize']
+
+// 부팅 시 1회 정리: 폐기 status 레코드 삭제 + 미참조 로고 폴더(~/media/logo) 제거 (best-effort).
+const cleanupLegacyStatus = async () => {
+  try {
+    const removed = await dbStatus.remove(
+      { type: { $in: OBSOLETE_STATUS_TYPES } },
+      { multi: true },
+    )
+    if (removed) logger.info(`Removed ${removed} obsolete status records (${OBSOLETE_STATUS_TYPES.join(', ')})`)
+  } catch (e) {
+    logger.warn(`cleanupLegacyStatus (db) failed: ${e.message}`)
+  }
+  try {
+    const logoDir = path.join(getMediaPath(), 'logo')
+    if (fs.existsSync(logoDir)) {
+      fs.rmSync(logoDir, { recursive: true, force: true })
+      logger.info(`Removed obsolete logo folder: ${logoDir}`)
+    }
+  } catch (e) {
+    logger.warn(`cleanupLegacyStatus (folder) failed: ${e.message}`)
+  }
+}
 
 const updateStatusFromDb = async () => {
   const st = await dbStatus.find({})
@@ -19,20 +48,15 @@ const updateStatusFromDb = async () => {
         pStatus.audioDevice =
           status.value ?? status.audioDevice ?? pStatus.audioDevice
         break
-      case 'logoFile':
-        pStatus.logoFile = status.file ?? pStatus.logoFile
-        break
-      case 'logoSize':
-        pStatus.logoSize = status.value ?? pStatus.logoSize
-        break
-      case 'logoShow':
-        pStatus.logoShow = status.value ?? pStatus.logoShow
-        break
       case 'startOnPlay':
         pStatus.startOnPlay = status.value ?? pStatus.startOnPlay
         break
       case 'startOnPlaylistId':
         pStatus.startOnPlaylistId = status.playlistId ?? pStatus.startOnPlaylistId
+        break
+      case 'autoStart':
+        // Windows 시작 시 자동 실행 (작업 스케줄러) 사용자 의도
+        pStatus.autoStart = status.value ?? pStatus.autoStart
         break
       case 'tcpPort':
         pStatus.tcpPort = status.value ?? pStatus.tcpPort
@@ -109,4 +133,4 @@ const updateStatusFromDb = async () => {
   }
 }
 
-export { updateStatusFromDb }
+export { updateStatusFromDb, cleanupLegacyStatus }

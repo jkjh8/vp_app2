@@ -17,6 +17,7 @@ import {
 import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
+import { getSource, toEngineSource } from '../api/player/sources.js'
 
 let lastEndReachedEvent = null
 // audio_track_data SPA 발신 스로틀 (트랙당 100ms 틱 × N트랙 홍수 방지)
@@ -54,10 +55,6 @@ function handleReady() {
       command: 'playlist_mode',
       value: pStatus.playlistMode,
     },
-
-    { command: 'logo_file', file: pStatus.logoFile },
-    { command: 'logo_size', size: pStatus.logoSize },
-    { command: 'show_logo', show: pStatus.logoShow },
   ].filter(Boolean)
 
   for (const cmd of commands) {
@@ -429,16 +426,6 @@ const parsePlayerStatus = async (data) => {
         logger.debug(`Track index: ${pStatus.trackId}`)
         break
 
-      case 'logo_visibility':
-        // 플레이어가 미디어 타입(비디오/이미지=숨김, 오디오=표시, §2.7)에 따라 자동
-        // 계산한 "지금 실제로 보이는지" 값이다. 사용자가 Show Logo 토글로 설정한
-        // 선호값(pStatus.logoShow)과는 별개 — 여기서 logoShow를 덮어쓰면 비디오 재생
-        // 중 토글을 켜자마자 곧바로 false 피드백에 되밟혀 꺼지는 버그가 된다.
-        pStatus.logoVisible = msgData.show
-        ioClient.emit('pStatus', { logoVisible: pStatus.logoVisible })
-        logger.debug(`Logo visibility: ${pStatus.logoVisible}`)
-        break
-
       // v2 기능 협상 (PROTOCOL.md §5.1) — 신규 명령 송신 게이트
       case 'capabilities':
         pStatus.playerFeatures = msgData?.features || []
@@ -469,6 +456,16 @@ const parsePlayerStatus = async (data) => {
           }
           playerSend({ command: 'get_windows' })
         }
+        // 라이브 입력 소스(v3): 창에 귀속된 소스를 플레이어 재기동/최초 연결 시 재부착(유실 방지).
+        // 창 생성(create_window) 이후에 발신해야 하므로 위 multi_window 블록 뒤에 둔다.
+        if (pStatus.playerFeatures.includes('live_source')) {
+          for (const w of pStatus.windows || []) {
+            if (!w?.sourceId) continue
+            const src = await getSource(w.sourceId)
+            if (src)
+              playerSend({ command: 'set_window_source', window_id: w.id, source: toEngineSource(src) })
+          }
+        }
         // 출력 채널 지연은 전역 설정 폐지 → 재생 중인 장면의 채널 설정을 따른다(playScene에서 적용).
         // 전역 마스터 볼륨 복원
         if (pStatus.playerFeatures.includes('master_volume')) {
@@ -481,9 +478,10 @@ const parsePlayerStatus = async (data) => {
           (pStatus.playerFeatures.includes('ptp_sync') ||
             pStatus.playerFeatures.includes('net_clock'))
         ) {
-          import('../api/player/peerSync.js').then(({ enableClockLocal }) =>
-            enableClockLocal(pStatus.sync.role),
-          )
+          import('../api/player/peerSync.js').then(({ enableClockLocal, startClockHealth }) => {
+            enableClockLocal(pStatus.sync.role)
+            startClockHealth() // 5초 주기 클럭 헬스체크 + 자가복구 시작
+          })
         }
         break
 
@@ -520,6 +518,26 @@ const parsePlayerStatus = async (data) => {
         logger.error(
           `[Player] playback_error: ${payload.reason} "${payload.path}" (win ${payload.windowId})`,
         )
+        break
+      }
+
+      // 라이브 입력 소스 상태(v3): 창별 연결 상태 — connecting|playing|reconnecting|error|cleared.
+      // pStatus.sourceStates[windowId]에 저장(홈 배지/상태). cleared는 키 삭제(좀비 방지 — socketio 통째교체).
+      case 'source_status': {
+        const wid = typeof msgData?.window_id === 'number' ? msgData.window_id : null
+        if (wid == null) break
+        if (msgData.state === 'cleared') {
+          delete pStatus.sourceStates[wid]
+        } else {
+          pStatus.sourceStates[wid] = {
+            kind: msgData.kind || '',
+            state: msgData.state || '',
+            reason: msgData.reason || null,
+            at: Date.now(),
+          }
+        }
+        ioClient.emit('pStatus', { sourceStates: pStatus.sourceStates })
+        logger.debug(`[Player] source_status win=${wid} state=${msgData.state}`)
         break
       }
 

@@ -254,13 +254,13 @@ const deleteFilesByUuids = async (uuids) => {
 const resetAllMediaFiles = async () => {
   const mediaPath = getMediaPath()
   try {
-    // mediaPath 아래 logo폴더를 제외한 모든 파일과 폴더를 삭제
+    // mediaPath 아래 모든 파일과 폴더를 삭제
     const files = await fs.promises.readdir(mediaPath, { withFileTypes: true })
     for (const file of files) {
       const filePath = path.join(mediaPath, file.name)
-      if (file.isDirectory() && file.name !== 'logo') {
+      if (file.isDirectory()) {
         await fs.promises.rmdir(filePath, { recursive: true })
-      } else if (file.name !== 'logo') {
+      } else {
         await fs.promises.unlink(filePath)
       }
     }

@@ -25,8 +25,6 @@ import {
   setDisplay,
   getDisplays,
   setBackground,
-  showLogo,
-  setLogoSize,
 } from '../player/index.js'
 import {
   playlistPlay,
@@ -38,7 +36,30 @@ import {
   stopWindow,
   preloadPlaylistOnly,
 } from '../playlists/index.js'
-import { listWindows, setPreloadConfig, setChannelDelays } from '../player/windows.js'
+import {
+  listWindows,
+  createWindow,
+  updateWindow,
+  deleteWindow,
+  setPreloadConfig,
+  setChannelDelays,
+  listPresets,
+  savePreset,
+  updatePreset,
+  renamePreset,
+  deletePreset,
+  applyPreset,
+  reapplySource,
+  detachSource,
+} from '../player/windows.js'
+import {
+  listSources,
+  getSource,
+  createSource,
+  updateSource,
+  deleteSource,
+} from '../player/sources.js'
+import { getAutostart, setAutostart } from '../system/autostart.js'
 import {
   timelinePlay,
   timelinePause,
@@ -271,11 +292,205 @@ export const commands = [
     handler: ({ windowId }) => setPrevious(windowId),
   },
   {
+    name: 'window.create',
+    category: 'window',
+    description: '출력 창 생성 (모니터/좌표/크기/비율/배경/z순서, 선택적 라이브 소스 귀속)',
+    params: [
+      { name: 'name', type: 'string' },
+      { name: 'monitorIndex', type: 'number', jsonAliases: ['monitor_index'] },
+      { name: 'x', type: 'number' },
+      { name: 'y', type: 'number' },
+      { name: 'width', type: 'number' },
+      { name: 'height', type: 'number' },
+      { name: 'aspectMode', type: 'string', jsonAliases: ['aspect_mode'] },
+      { name: 'backgroundColor', type: 'string', jsonAliases: ['background_color'] },
+      { name: 'zOrder', type: 'number', jsonAliases: ['z_order'] },
+      { name: 'sourceId', type: 'string', jsonAliases: ['source_id'] },
+    ],
+    handler: async (params) => {
+      const win = await createWindow(params)
+      return { message: `Window ${win.id} created`, data: { window: win } }
+    },
+  },
+  {
+    name: 'window.update',
+    category: 'window',
+    description: '출력 창 수정 (지정한 필드만 변경)',
+    params: [
+      { name: 'id', type: 'number', required: true, jsonAliases: ['windowId'] },
+      { name: 'name', type: 'string' },
+      { name: 'monitorIndex', type: 'number', jsonAliases: ['monitor_index'] },
+      { name: 'x', type: 'number' },
+      { name: 'y', type: 'number' },
+      { name: 'width', type: 'number' },
+      { name: 'height', type: 'number' },
+      { name: 'aspectMode', type: 'string', jsonAliases: ['aspect_mode'] },
+      { name: 'backgroundColor', type: 'string', jsonAliases: ['background_color'] },
+      { name: 'zOrder', type: 'number', jsonAliases: ['z_order'] },
+    ],
+    handler: async ({ id, ...patch }) => {
+      const win = await updateWindow(id, patch)
+      if (!win) fail(`Window ${id} not found`, 'NOT_FOUND')
+      return { message: `Window ${id} updated`, data: { window: win } }
+    },
+  },
+  {
+    name: 'window.delete',
+    category: 'window',
+    description: '출력 창 삭제 (그 창을 참조하던 클립도 정리)',
+    params: [{ name: 'id', type: 'number', required: true, jsonAliases: ['windowId'] }],
+    handler: async ({ id }) => {
+      await deleteWindow(id)
+      return { message: `Window ${id} deleted`, data: { id } }
+    },
+  },
+  {
+    name: 'window.setsource',
+    category: 'window',
+    description: '지정 창에 라이브 입력 소스를 귀속 (지속 레이어로 재생)',
+    params: [
+      { name: 'windowId', type: 'number', required: true },
+      { name: 'sourceId', type: 'string', required: true },
+    ],
+    handler: async ({ windowId, sourceId }) => {
+      const src = await getSource(sourceId)
+      if (!src) fail(`Source ${sourceId} not found`, 'NOT_FOUND')
+      const win = await updateWindow(windowId, { sourceId: String(sourceId) })
+      if (!win) fail(`Window ${windowId} not found`, 'NOT_FOUND')
+      return { message: `Window ${windowId} ← source ${sourceId}`, data: { window: win } }
+    },
+  },
+  {
+    name: 'window.clearsource',
+    category: 'window',
+    description: '지정 창의 라이브 소스 귀속 해제',
+    params: [{ name: 'windowId', type: 'number', required: true }],
+    handler: async ({ windowId }) => {
+      const win = await updateWindow(windowId, { sourceId: null })
+      if (!win) fail(`Window ${windowId} not found`, 'NOT_FOUND')
+      return { message: `Window ${windowId} source cleared`, data: { window: win } }
+    },
+  },
+  {
     name: 'window.list',
     category: 'query',
     description: '출력 창 목록 조회 (설정 창 + 플레이어 실제 창)',
     params: [],
     handler: () => ({ data: listWindows() }),
+  },
+
+  // ── 라이브 입력 소스 (source.*) ─────────────────────────────
+  // RTP/RTSP/SRT/NDI 라이브 소스 "정의" CRUD. 실제 화면 표시는 window.setsource로 창에 귀속.
+  {
+    name: 'source.create',
+    category: 'source',
+    description: '라이브 소스 생성 (kind: rtsp|srt|rtp|ndi). 복합 값은 JSON 포트 권장',
+    params: [
+      { name: 'name', type: 'string', required: true },
+      { name: 'kind', type: 'string' },
+      { name: 'uri', type: 'string' }, // rtsp://… / srt://…
+      { name: 'ndi_name', type: 'string', jsonAliases: ['ndiName'] },
+      { name: 'url_address', type: 'string', jsonAliases: ['urlAddress'] },
+      { name: 'latency_ms', type: 'number', jsonAliases: ['latency'] },
+      { name: 'has_audio', type: 'boolean', jsonAliases: ['hasAudio'] },
+      { name: 'rtp', type: 'raw' }, // JSON 포트 전용 (순수 RTP 하위 필드 객체)
+    ],
+    handler: async (params) => {
+      const src = await createSource(params)
+      return { message: `Source ${src.id} created`, data: { source: src } }
+    },
+  },
+  {
+    name: 'source.update',
+    category: 'source',
+    description: '라이브 소스 수정 (지정 필드만). 귀속된 창은 라이브 갱신',
+    params: [
+      { name: 'id', type: 'string', required: true },
+      { name: 'name', type: 'string' },
+      { name: 'kind', type: 'string' },
+      { name: 'uri', type: 'string' },
+      { name: 'ndi_name', type: 'string', jsonAliases: ['ndiName'] },
+      { name: 'url_address', type: 'string', jsonAliases: ['urlAddress'] },
+      { name: 'latency_ms', type: 'number', jsonAliases: ['latency'] },
+      { name: 'has_audio', type: 'boolean', jsonAliases: ['hasAudio'] },
+      { name: 'rtp', type: 'raw' },
+    ],
+    handler: async ({ id, ...patch }) => {
+      const src = await updateSource(id, patch)
+      if (!src) fail(`Source ${id} not found`, 'NOT_FOUND')
+      await reapplySource(id) // 이 소스를 쓰는 창들 라이브 갱신
+      return { message: `Source ${id} updated`, data: { source: src } }
+    },
+  },
+  {
+    name: 'source.delete',
+    category: 'source',
+    description: '라이브 소스 삭제 (귀속 창 자동 해제 후 삭제)',
+    params: [{ name: 'id', type: 'string', required: true }],
+    handler: async ({ id }) => {
+      await detachSource(id) // 귀속 창 해제 + player clear (삭제 전)
+      await deleteSource(id)
+      return { message: `Source ${id} deleted`, data: { id } }
+    },
+  },
+
+  // ── 화면 구성 프리셋 (layout.*) ─────────────────────────────
+  // 현재 출력 창 배치의 이름 붙은 스냅샷. 적용 시 전 창을 프리셋 배치로 교체(소스 귀속 포함).
+  {
+    name: 'layout.save',
+    category: 'layout',
+    description: '현재 창 배치를 새 프리셋으로 저장',
+    params: [{ name: 'name', type: 'string' }],
+    handler: async ({ name }) => {
+      const preset = await savePreset(name)
+      return { message: `Layout ${preset.id} saved`, data: { preset } }
+    },
+  },
+  {
+    name: 'layout.apply',
+    category: 'layout',
+    description: '프리셋 적용 (전 창을 프리셋 배치로 교체)',
+    params: [{ name: 'id', type: 'number', required: true }],
+    handler: async ({ id }) => {
+      const preset = await applyPreset(id)
+      if (!preset) fail(`Layout ${id} not found`, 'NOT_FOUND')
+      return { message: `Layout ${id} applied`, data: { preset } }
+    },
+  },
+  {
+    name: 'layout.update',
+    category: 'layout',
+    description: '기존 프리셋을 현재 배치로 덮어쓰기',
+    params: [{ name: 'id', type: 'number', required: true }],
+    handler: async ({ id }) => {
+      const preset = await updatePreset(id)
+      if (!preset) fail(`Layout ${id} not found`, 'NOT_FOUND')
+      return { message: `Layout ${id} overwritten`, data: { preset } }
+    },
+  },
+  {
+    name: 'layout.rename',
+    category: 'layout',
+    description: '프리셋 이름 변경',
+    params: [
+      { name: 'id', type: 'number', required: true },
+      { name: 'name', type: 'string', required: true },
+    ],
+    handler: async ({ id, name }) => {
+      const preset = await renamePreset(id, name)
+      if (!preset) fail(`Layout ${id} not found`, 'NOT_FOUND')
+      return { message: `Layout ${id} renamed`, data: { preset } }
+    },
+  },
+  {
+    name: 'layout.delete',
+    category: 'layout',
+    description: '프리셋 삭제',
+    params: [{ name: 'id', type: 'number', required: true }],
+    handler: async ({ id }) => {
+      await deletePreset(id)
+      return { message: `Layout ${id} deleted`, data: { id } }
+    },
   },
 
   // ── 프리로딩 (preload.*) ────────────────────────────────────
@@ -360,7 +575,7 @@ export const commands = [
     },
   },
 
-  // ── 디스플레이 / 로고 (display.* / logo.*) ──────────────────
+  // ── 디스플레이 (display.*) ──────────────────────────────────
   {
     name: 'display.list',
     category: 'query',
@@ -396,26 +611,6 @@ export const commands = [
     handler: async ({ color }) => {
       await setBackground(color)
       return { message: `Background set`, data: { backgroundColor: pStatus.backgroundColor } }
-    },
-  },
-  {
-    name: 'logo.show',
-    category: 'display',
-    description: '로고 표시/숨김',
-    params: [{ name: 'show', type: 'boolean', required: true }],
-    handler: async ({ show }) => {
-      await showLogo(show)
-      return { message: `Logo ${show ? 'shown' : 'hidden'}`, data: { logoShow: pStatus.logoShow } }
-    },
-  },
-  {
-    name: 'logo.size',
-    category: 'display',
-    description: '로고 크기 설정',
-    params: [{ name: 'size', type: 'number', required: true }],
-    handler: async ({ size }) => {
-      await setLogoSize(size)
-      return { message: `Logo size: ${pStatus.logoSize}`, data: { logoSize: pStatus.logoSize } }
     },
   },
 
@@ -510,6 +705,24 @@ export const commands = [
     params: [],
     handler: () => ({ data: { enabled: pStatus.startOnPlay, playlistId: pStatus.startOnPlaylistId } }),
   },
+  {
+    name: 'autostart.set',
+    category: 'system',
+    description: 'Windows 시작(로그온) 시 앱 자동 실행 설정 (값 생략 시 현재 설정 반환)',
+    params: [{ name: 'enabled', type: 'boolean' }],
+    handler: async ({ enabled }) => {
+      if (enabled === undefined) return { message: 'Current autostart', data: await getAutostart() }
+      const r = await setAutostart(enabled)
+      return { message: `Autostart ${r.enabled ? 'enabled' : 'disabled'}`, data: r }
+    },
+  },
+  {
+    name: 'autostart.get',
+    category: 'query',
+    description: '현재 자동 실행(로그온 시) 설정 조회',
+    params: [],
+    handler: async () => ({ data: await getAutostart() }),
+  },
 
   // ── 시스템 / 조회 (system.*) ────────────────────────────────
   {
@@ -532,6 +745,7 @@ export const commands = [
         masterVolume: pStatus.masterVolume,
         backgroundColor: pStatus.backgroundColor,
         windows: (pStatus.windows || []).length,
+        autoStart: !!pStatus.autoStart,
         playerFeatures: pStatus.playerFeatures,
         file: pStatus.file?.uuid
           ? { uuid: pStatus.file.uuid, filename: pStatus.file.filename, number: pStatus.file.number }
@@ -574,6 +788,39 @@ export const commands = [
     handler: async () => {
       const files = await dbFiles.find()
       return { message: `Found ${files.length} files`, data: { files, count: files.length } }
+    },
+  },
+  {
+    name: 'source.list',
+    category: 'query',
+    description: '라이브 입력 소스 목록 조회',
+    params: [],
+    handler: async () => {
+      const sources = await listSources()
+      return { message: `Found ${sources.length} sources`, data: { sources, count: sources.length } }
+    },
+  },
+  {
+    name: 'source.get',
+    category: 'query',
+    description: '특정 라이브 소스 조회',
+    params: [{ name: 'id', type: 'string', required: true }],
+    handler: async ({ id }) => {
+      const src = await getSource(id)
+      return { message: src ? `Found source ${id}` : `Source ${id} not found`, data: { source: src } }
+    },
+  },
+  {
+    name: 'layout.list',
+    category: 'query',
+    description: '화면 구성 프리셋 목록 조회 (현재 배치와 일치하는 activePresetId 포함)',
+    params: [],
+    handler: () => {
+      const presets = listPresets()
+      return {
+        message: `Found ${presets.length} layouts`,
+        data: { presets, count: presets.length, activePresetId: pStatus.activePresetId },
+      }
     },
   },
 ]
