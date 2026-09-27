@@ -13,13 +13,17 @@ let pStatus = {
   preloadReady: false, // 파생: 활성 창 전부 프리롤 완료 (UI "로딩됨" 배지)
   trackId: 0,
   repeat: 'none',
+  // 창별 반복 모드 (윈도우 모드 전용) — { [windowId]: 'none'|'all'|'repeat_one' }.
+  // 명시값이 없는 창은 전역 repeat를 따른다(폴백). dbStatus 'windowRepeat'에 영속.
+  // 윈도우 모드에서 창마다 자동 전환(advanceWindowFromEnd)에 독립 적용된다.
+  windowRepeat: {},
   tcpSimplePort: 15000,
   tcpJsonPort: 15001,
   // VP_WEB_PORT: 개발 환경 포트 충돌(예: VS Code 프리뷰가 3000 점유) 대응용 오버라이드
   webPort: Number(process.env.VP_WEB_PORT) || 3000,
   startOnPlay: false,
   startOnPlaylistId: null,
-  // Windows 시작 시 앱 자동 실행 (작업 스케줄러 "VP App"). 사용자 의도 영속값 — api/system/autostart.js.
+  // Windows 시작 시 앱 자동 실행 (HKCU Run 키 "VP App", 관리자 불필요). 사용자 의도 영속값 — api/system/autostart.js.
   autoStart: false,
   audioDevices: [],
   audioDevice: '',

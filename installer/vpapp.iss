@@ -4,7 +4,7 @@
 ; 출력: installer\Output\VP-App-Setup-<version>.exe
 
 #define AppName "VP App"
-#define AppVersion "0.7.0"
+#define AppVersion "0.7.2"
 #define AppPublisher "TechData"
 #define AppExeName "VPApp.exe"
 #define SrcDir "..\dist-node"
@@ -35,7 +35,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Windows 시작 시 자동 실행 (작업 스케줄러)"
+Name: "autostart"; Description: "Windows 시작 시 자동 실행 (관리자 권한 불필요)"
 Name: "firewall"; Description: "방화벽에서 제어/동기 포트 허용 (TCP 3000/15000/15001, PTP UDP 319/320, 동기 UDP 15002-15004)"
 
 [Files]
@@ -64,14 +64,23 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""V
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""VP App (Server)"" dir=in action=allow program=""{app}\VPApp.exe"" enable=yes profile=any"; Tasks: firewall; Flags: runhidden
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""VP App (Player)"" dir=in action=allow program=""{app}\player\vplayer.exe"" enable=yes profile=any"; Tasks: firewall; Flags: runhidden
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""VP App (PTP Helper)"" dir=in action=allow program=""{app}\player\gst-ptp-helper.exe"" enable=yes profile=any"; Tasks: firewall; Flags: runhidden
-; 자동시작 작업 등록 (로그온 시, 콘솔 숨김, 최고 권한)
-Filename: "{sys}\schtasks.exe"; Parameters: "/Create /F /TN ""VP App"" /SC ONLOGON /RL HIGHEST /TR ""wscript.exe \""{app}\vpapp-launch.vbs\"""""; Tasks: autostart; Flags: runhidden
+; 자동 실행 등록 — 런타임(src/api/system/autostart.js)과 동일한 사용자별 Run 키(HKCU, 관리자 불필요).
+;  runasoriginaluser: 설치기는 승격 실행이지만 이 reg 는 "원래 로그인 사용자" 권한으로 돌려
+;  올바른 사용자 하이브에 기록한다(다른 관리자 계정으로 설치해도 정확). [Registry] HKCU 를 안 쓰므로
+;  Inno 의 per-user 영역 경고도 사라진다.
+;  값 데이터 = wscript.exe "…\vpapp-launch.vbs" — reg /d 안의 \"" 는 리터럴 큰따옴표(공백 경로 감싸기).
+Filename: "{sys}\reg.exe"; Parameters: "add ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v ""VP App"" /t REG_SZ /d ""wscript.exe \""{app}\vpapp-launch.vbs\"""" /f"; Tasks: autostart; Flags: runhidden runasoriginaluser
 ; 설치 직후 바로 실행
 Filename: "{app}\vpapp-launch.vbs"; Description: "지금 VP App 실행"; Flags: postinstall nowait runasoriginaluser shellexec skipifsilent
 
 ; 참고: vpapp-launch.vbs 는 scripts\build-node.mjs 가 dist-node 에 생성해 [Files]로 복사됨
 
 [UninstallRun]
+; 자동 실행 Run 키 제거 — 언인스톨러는 승격 실행되므로, 로그인 사용자=관리자(UAC 동의)인 일반적인
+;  경우엔 HKCU 가 동일 사용자 하이브라 정확히 삭제된다. (runasoriginaluser 는 [UninstallRun] 미지원.)
+;  값이 없으면 무시됨. 앱 내 토글로도 정확한 사용자 하이브에서 켜고 끌 수 있다.
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v ""VP App"" /f"; Flags: runhidden; RunOnceId: "DelRunKey"
+; 레거시 정리: 구버전이 만든 작업 스케줄러 "VP App" 작업 제거 (신버전은 HKCU Run 키 사용). 없으면 무시됨.
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /F /TN ""VP App"""; Flags: runhidden; RunOnceId: "DelTask"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""VP App HTTP"""; Flags: runhidden; RunOnceId: "DelFw1"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""VP App TCP Simple"""; Flags: runhidden; RunOnceId: "DelFw2"

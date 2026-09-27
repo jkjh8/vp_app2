@@ -35,7 +35,7 @@ VP App2는 네트워크 멀티 윈도우 비디오 플레이어를 제어하는 
 | PUT | `/hwaccel` | 하드웨어 가속 설정(저장 후 플레이어 재시작으로 적용) | body `{ value: 'auto'\|'on'\|'off' }` |
 | PUT | `/master_volume` | 전역 마스터 볼륨(저장, 슬라이더 릴리즈) | body `{ value: 0~100 }` |
 | PUT | `/master_volume/live` | 전역 마스터 볼륨(전송만, 드래그 — 저장 안 함) | body `{ value: 0~100 }` |
-| GET | `/repeat` | 반복 모드 순환 토글(`none`→`all`→`repeat_one`) | 응답 `{ message, mode }` |
+| GET | `/repeat` | 반복 모드 순환 토글(`none`→`all`→`repeat_one`). `?windowId=N` 지정 시 그 창만(윈도우 모드) 전역과 독립 토글 | 쿼리 `?windowId`(선택) · 응답 `{ message, mode, windowId }` |
 | GET | `/next` | 다음 트랙 | - |
 | GET | `/prev` | 이전 트랙(5초 이내면 이전, 아니면 현재 트랙 처음으로) | - |
 | GET | `/audio_devices` | 오디오 장치 목록 조회 요청(결과는 `pStatus.audioDevices`로 푸시) | - |
@@ -141,8 +141,9 @@ Phase B 타임라인 모드(플레이리스트 모드와 상호 배타). 트랜�
   전 창이 함께 다음 장면으로 넘어갑니다. 플레이어가 `play_synced`를 지원하면 배리어로 묶여 동일
   `start_at`에 동시 스왑됩니다.
 - **window (윈도우)**: 각 창이 자기만의 순서 목록을 **독립적으로** 재생/정지합니다. 창별 커서가
-  따로 전진하며, 전역 `repeat`가 창별로 적용됩니다. 단일 창 제어는
-  `GET /api/playlist/window/play`, `GET /api/playlist/window/stop`을 사용합니다.
+  따로 전진하며, 반복 모드도 **창별로 독립** 지정됩니다(`pStatus.windowRepeat[windowId]`, 미지정 창은
+  전역 `repeat`로 폴백). 창별 반복 설정은 `GET /api/player/repeat?windowId=N`으로 토글합니다.
+  단일 창 재생/정지는 `GET /api/playlist/window/play`, `GET /api/playlist/window/stop`을 사용합니다.
 
 관련 상태/제어 요약:
 
@@ -161,7 +162,8 @@ Phase B 타임라인 모드(플레이리스트 모드와 상호 배타). 트랜�
 
 `GET /api/status`의 응답 본문이자, socket.io `/client` 네임스페이스의 `pStatus` 이벤트로 푸시되는
 객체입니다. 소켓 이벤트는 **부분 패치**로 전송되며, 다음 키들은 **통째 교체**(키 삭제가 의미를 가짐)로
-전송됩니다: `windowStates`, `preloadStatus`, `audioTracks`, `memory`, `windows`, `playerWindows`.
+전송됩니다: `windowStates`, `preloadStatus`, `audioTracks`, `memory`, `windows`, `playerWindows`,
+`windowRepeat`.
 
 | 키 | 타입 | 설명 |
 | --- | --- | --- |
@@ -173,7 +175,8 @@ Phase B 타임라인 모드(플레이리스트 모드와 상호 배타). 트랜�
 | `preloadStatus` | object | 창별 프리롤 진척 `{ [windowId]: { expected, prerolled, ready } }` (통째 교체) |
 | `preloadReady` | boolean | 활성 창 전부 프리롤 완료(파생값) |
 | `trackId` | number | 현재 트랙/장면 인덱스 |
-| `repeat` | `'none'\|'all'\|'repeat_one'` | 반복 모드 |
+| `repeat` | `'none'\|'all'\|'repeat_one'` | 전역 반복 모드(씬 모드 / 창별 미지정 시 폴백) |
+| `windowRepeat` | object | 창별 반복 모드 `{ [windowId]: 'none'\|'all'\|'repeat_one' }`(윈도우 모드, 통째 교체). 없는 창은 `repeat`로 폴백 |
 | `tcpSimplePort` / `tcpJsonPort` | number | TCP 외부 제어 포트(기본 15000 / 15001) |
 | `webPort` | number | REST/소켓 포트(기본 3000, `VP_WEB_PORT` 오버라이드) |
 | `startOnPlay` | boolean | 부팅 시 자동재생 여부 |

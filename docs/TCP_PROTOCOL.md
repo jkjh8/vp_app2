@@ -132,8 +132,9 @@ VP App2의 TCP 서버는 표준 JSON 응답 봉투로 일관된 피드백을 제
 - `logo.show <true|false>` / `logo.size <n>`
 
 ### 반복 (repeat.*)
-- `repeat.set [none|all|repeat_one]` — 생략 시 토글
-- `repeat.get`
+- `repeat.set [none|all|repeat_one] [windowId]` — 생략 시 토글. `windowId` 지정 시 그 창만
+  (윈도우 모드) 전역과 **독립**으로 설정/토글. 예) JSON `{"command":"repeat.set","mode":"all","windowId":1}`
+- `repeat.get` — 응답 `{ repeat, windowRepeat, allowedModes }` (`windowRepeat` = 창별 반복 맵)
 
 ### 타임라인 (timeline.*) — 플레이어 timeline 기능 필요
 - `timeline.play <timelineId> [ms]`

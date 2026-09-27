@@ -618,22 +618,32 @@ export const commands = [
   {
     name: 'repeat.set',
     category: 'repeat',
-    description: '반복 모드 설정 (none | all | repeat_one, 생략 시 토글)',
-    params: [{ name: 'mode', type: 'string' }],
-    handler: async ({ mode }) => {
+    description: '반복 모드 설정 (none | all | repeat_one, 생략 시 토글). windowId 지정 시 그 창만(윈도우 모드)',
+    params: [
+      { name: 'mode', type: 'string' },
+      { name: 'windowId', type: 'number' },
+    ],
+    handler: async ({ mode, windowId }) => {
       const allowed = allowedRepeatModes()
       if (mode && !allowed.includes(mode)) fail(`invalid mode (allowed: ${allowed.join(', ')})`, 'INVALID_PARAMETER')
-      const r = await setRepeat(mode || undefined)
-      broadcastEvent(TCP_EVENTS.REPEAT_CHANGED, { repeat: r })
-      return { data: { repeat: r, allowedModes: allowed } }
+      const wid = windowId != null ? Number(windowId) : null
+      const r = await setRepeat(mode || undefined, wid)
+      broadcastEvent(TCP_EVENTS.REPEAT_CHANGED, wid != null ? { repeat: r, windowId: wid } : { repeat: r })
+      return { data: { repeat: r, windowId: wid, allowedModes: allowed } }
     },
   },
   {
     name: 'repeat.get',
     category: 'query',
-    description: '현재 반복 모드 및 허용 모드 조회',
+    description: '현재 반복 모드 및 허용 모드 조회 (창별 반복 windowRepeat 포함)',
     params: [],
-    handler: () => ({ data: { repeat: pStatus.repeat, allowedModes: allowedRepeatModes() } }),
+    handler: () => ({
+      data: {
+        repeat: pStatus.repeat,
+        windowRepeat: pStatus.windowRepeat || {},
+        allowedModes: allowedRepeatModes(),
+      },
+    }),
   },
 
   // ── 타임라인 (timeline.*) ───────────────────────────────────
@@ -739,6 +749,7 @@ export const commands = [
         playbackMode: pStatus.playbackMode,
         timelineMode: pStatus.timelineMode,
         repeat: pStatus.repeat,
+        windowRepeat: pStatus.windowRepeat || {},
         trackId: pStatus.trackId,
         fullscreen: pStatus.fullscreen,
         audioDevice: pStatus.audioDevice,

@@ -372,11 +372,33 @@ const setDisplay = async ({ monitorIndex, x, y, width, height, aspectMode }) => 
   return 'Display settings updated'
 }
 
-const setRepeat = async (mode = null) => {
+// 반복 모드 설정. windowId 지정 시 그 창만(윈도우 모드) 설정/토글 — 전역 repeat와 독립.
+// mode 미지정이면 현재값에서 다음 모드로 토글. 창별 값은 pStatus.windowRepeat에 영속.
+const setRepeat = async (mode = null, windowId = null) => {
   let modes = ['none', 'all', 'repeat_one']
   if (pStatus.playlistMode === false) {
     modes = ['none', 'all']
   }
+
+  // ── 창별 반복 (윈도우 모드) ────────────────────────────────
+  const W = windowId != null ? Number(windowId) : null
+  if (W != null && Number.isInteger(W)) {
+    const cur = pStatus.windowRepeat?.[W] ?? pStatus.repeat
+    let next
+    if (mode && modes.includes(mode)) next = mode
+    else next = modes[(modes.indexOf(cur) + 1) % modes.length]
+    pStatus.windowRepeat = { ...(pStatus.windowRepeat || {}), [W]: next }
+    await dbStatus.update(
+      { type: 'windowRepeat' },
+      { $set: { value: pStatus.windowRepeat } },
+      { upsert: true },
+    )
+    ioClient.emit('pStatus', { windowRepeat: pStatus.windowRepeat })
+    logger.info(`Repeat mode for window ${W} set to: ${next}`)
+    return next
+  }
+
+  // ── 전역 반복 (씬 모드 / 기본) ─────────────────────────────
   if (mode && modes.includes(mode)) {
     pStatus.repeat = mode
   } else {
@@ -388,6 +410,7 @@ const setRepeat = async (mode = null) => {
     { $set: { value: pStatus.repeat } },
     { upsert: true },
   )
+  ioClient.emit('pStatus', { repeat: pStatus.repeat })
   logger.info(`Repeat mode set to: ${pStatus.repeat}`)
   return pStatus.repeat
 }

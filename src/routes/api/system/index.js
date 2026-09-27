@@ -1,5 +1,5 @@
 // 시스템(앱 수준) 설정 REST — 현재는 Windows 시작 시 자동 실행 토글.
-// 자동실행 실체(작업 스케줄러)는 api/system/autostart.js가 담당한다.
+// 자동실행 실체(HKCU Run 키, 관리자 권한 불필요)는 api/system/autostart.js가 담당한다.
 
 import express from 'express'
 import { getAutostart, setAutostart } from '../../../api/system/autostart.js'

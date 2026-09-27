@@ -319,7 +319,11 @@ const setPlaylistMode = async (mode) => {
       try {
         // persist repeat change if dbStatus available
         if (typeof dbStatus !== 'undefined' && dbStatus) {
-          await dbStatus.update({ type: 'repeat' }, { mode: pStatus.repeat })
+          await dbStatus.update(
+            { type: 'repeat' },
+            { $set: { value: pStatus.repeat } },
+            { upsert: true },
+          )
         }
       } catch (dbErr) {
         logger.error(
@@ -1278,7 +1282,11 @@ const startWindowPlaylist = () => {
   logger.info(`Window playlist play: ${windowIds.length} windows [${windowIds.join(',')}]`)
 }
 
-// 창별 end_reached — 해당 창 커서만 전진 (전역 repeat를 창별 적용). slave는 자체 전환 안 함.
+// 창 W의 실효 반복 모드 — 창별 설정(windowRepeat)이 있으면 그것을, 없으면 전역 repeat로 폴백.
+// 윈도우 모드에서 창마다 독립적으로 반복 동작을 지정할 수 있게 한다.
+const windowRepeatMode = (W) => pStatus.windowRepeat?.[W] ?? pStatus.repeat
+
+// 창별 end_reached — 해당 창 커서만 전진 (창별 repeat 적용, 없으면 전역 폴백). slave는 자체 전환 안 함.
 const advanceWindowOnEnd = (data) => {
   if (pStatus.sync?.role === 'slave') return
   const W = data.window_id ?? 0
@@ -1302,7 +1310,7 @@ const advanceWindowFromEnd = (W, endedSeq) => {
   const scenes = pStatus.playlist?.tracks || []
   const seq = windowItemSequence(scenes, W)
   if (!seq.length) return
-  const repeat = pStatus.repeat
+  const repeat = windowRepeatMode(W) // 창별 반복 (없으면 전역 폴백)
   const isLast = endedSeq >= seq.length - 1
   const curWasVideo = !!seq[endedSeq]?.clip
   // 오디오 전용 직후(정지로 풀 해제) 영상 재생이면 풀을 재빌드해야 한다(preload=true).

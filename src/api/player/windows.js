@@ -184,6 +184,14 @@ const deleteWindow = async (id) => {
   id = Number(id)
   pStatus.windows = (pStatus.windows || []).filter((w) => w.id !== id)
   await persistWindows()
+  // 창별 반복 설정도 정리 (좀비 방지) — 있으면 삭제·영속·emit
+  if (pStatus.windowRepeat && id in pStatus.windowRepeat) {
+    const rest = { ...pStatus.windowRepeat }
+    delete rest[id]
+    pStatus.windowRepeat = rest
+    await dbStatus.update({ type: 'windowRepeat' }, { $set: { value: rest } }, { upsert: true })
+    ioClient.emit('pStatus', { windowRepeat: rest })
+  }
   await setActivePreset(null) // 직접 편집 → 현재 배치가 프리셋과 어긋남
   playerSend({ command: 'destroy_window', window_id: id })
   playerSend({ command: 'get_windows' })

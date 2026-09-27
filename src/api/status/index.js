@@ -127,6 +127,15 @@ const updateStatusFromDb = async () => {
         pStatus.playbackMode =
           status.value === 'window' || status.value === 'scene' ? status.value : pStatus.playbackMode
         break
+      case 'repeat':
+        // 전역 반복 모드 'none' | 'all' | 'repeat_one'
+        if (['none', 'all', 'repeat_one'].includes(status.value)) pStatus.repeat = status.value
+        break
+      case 'windowRepeat':
+        // 창별 반복 모드 { [windowId]: 'none'|'all'|'repeat_one' } (윈도우 모드 전용)
+        if (status.value && typeof status.value === 'object' && !Array.isArray(status.value))
+          pStatus.windowRepeat = status.value
+        break
       default:
         logger.warn(`Unknown status type: ${status.type}`)
     }

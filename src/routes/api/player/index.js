@@ -141,8 +141,10 @@ router.put('/master_volume/live', async (req, res) => {
 
 router.get('/repeat', async (req, res) => {
   try {
-    const mode = await setRepeat()
-    res.status(200).json({ message: `Repeat mode set to: ${mode}`, mode })
+    // windowId 지정 시 그 창만(윈도우 모드) 토글/설정 — 전역 repeat와 독립.
+    const windowId = req.query.windowId != null ? Number(req.query.windowId) : null
+    const mode = await setRepeat(null, windowId)
+    res.status(200).json({ message: `Repeat mode set to: ${mode}`, mode, windowId })
   } catch (error) {
     logger.error('Error occurred while setting repeat mode:', error)
     res.status(500).json({ error: 'Failed to set repeat mode' })

@@ -19,7 +19,8 @@ import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
 import { getSource, toEngineSource } from '../api/player/sources.js'
 
-let lastEndReachedEvent = null
+let lastEndReachedEvent = null // { key, at }
+const END_REACHED_DEDUP_MS = 1000
 // audio_track_data SPA 발신 스로틀 (트랙당 100ms 틱 × N트랙 홍수 방지)
 const audioTrackEmitAt = {}
 const AUDIO_TRACK_EMIT_INTERVAL_MS = 300
@@ -71,11 +72,17 @@ function handleEndReached(data) {
   // 멀티 윈도우(v3): dedup 키에 window_id 포함 (창별 독립 진행). 기본 0 = 하위호환.
   const winId = data.window_id ?? 0
   const eventKey = `${winId}-${data.playlist_track_index}-${data.active_player_id}`
-  if (lastEndReachedEvent === eventKey) {
+  // 중복 판정은 짧은 시간창 내 동일 키만 — 반복 재생(repeat_one/단일 트랙 all)은 같은 키가
+  // 트랙 길이만큼 뒤에 다시 오므로, 키를 영구 보관하면 두 번째 반복부터 전부 버려진다.
+  const now = Date.now()
+  if (
+    lastEndReachedEvent?.key === eventKey &&
+    now - lastEndReachedEvent.at < END_REACHED_DEDUP_MS
+  ) {
     logger.warn(`Duplicate end_reached event ignored: ${eventKey}`)
     return
   }
-  lastEndReachedEvent = eventKey
+  lastEndReachedEvent = { key: eventKey, at: now }
 
   logger.info(
     `End reached - win: ${winId}, track: ${data.playlist_track_index}, player: ${data.active_player_id}`,

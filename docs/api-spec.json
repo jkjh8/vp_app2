@@ -76,8 +76,9 @@
       "repeat": {
         "method": "GET",
         "path": "/api/player/repeat",
-        "description": "반복 모드 순환 토글 (none -> all -> repeat_one).",
-        "response": { "message": "string", "mode": "none | all | repeat_one" }
+        "description": "반복 모드 순환 토글 (none -> all -> repeat_one). windowId 지정 시 그 창만(윈도우 모드) 전역과 독립 토글.",
+        "query": { "windowId": "number (optional) — 창별 반복 대상 창 ID" },
+        "response": { "message": "string", "mode": "none | all | repeat_one", "windowId": "number | null" }
       },
       "next": {
         "method": "GET",
