@@ -34,3 +34,7 @@ yarn.lock
 # e2e/launcher temp artifacts
 scratchpad/fleet_test/
 scratchpad/two_pcs/
+
+# 웹 업데이트 암호 키 — 커밋 금지, 별도 백업 필수
+keys/
+*.vpu

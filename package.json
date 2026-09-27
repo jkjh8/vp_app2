@@ -19,7 +19,8 @@
     "dev": "cross-env NODE_ENV=development nodemon --exec node src/main.js",
     "lint": "eslint . --ext .js",
     "format": "prettier --write .",
-    "build": "node scripts/build-node.mjs"
+    "build": "node scripts/build-node.mjs",
+    "build:update": "node scripts/build-update.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

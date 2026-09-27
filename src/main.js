@@ -12,6 +12,7 @@ import { startTcpServer } from './tcp/index.js'
 import { startPlayer, stopPlayer } from './player/index.js'
 import { initSync } from './api/player/peerSync.js'
 import { initDiscovery } from './api/player/discovery.js'
+import { cleanupStaleUpdate } from './api/system/update.js'
 
 // 종료 시 플레이어 프로세스 정리 (Electron 생명주기 대체)
 onShutdown(() => stopPlayer())
@@ -29,6 +30,7 @@ if (!gotTheLock) {
     existsMediaPath()
     existsTmpPath()
     logger.debug('Media and tmp paths checked or created')
+    cleanupStaleUpdate() // 적용 안 된 업데이트 스테이징 정리 + 직전 업데이트 결과 로그
     initDb()
     logger.debug('Database initialized')
     await cleanupLegacyStatus() // 폐기된 로고 status 레코드/폴더 1회 정리 (updateStatusFromDb 경고 방지)

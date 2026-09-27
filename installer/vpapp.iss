@@ -38,6 +38,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "autostart"; Description: "Windows 시작 시 자동 실행 (관리자 권한 불필요)"
 Name: "firewall"; Description: "방화벽에서 제어/동기 포트 허용 (TCP 3000/15000/15001, PTP UDP 319/320, 동기 UDP 15002-15004)"
 
+[Dirs]
+; 웹 업데이트(재설치 없이 .vpu 패키지로 교체) — 앱은 일반 사용자 권한으로 돌므로 설치 폴더에
+;  사용자 수정 권한을 준다(하위 파일/폴더 상속). 없으면 업데이트가 NO_WRITE_PERMISSION으로 거부됨.
+Name: "{app}"; Permissions: users-modify
+
 [Files]
 ; dist-node 전체 (VPApp.exe, server.cjs, public\, player\, start.cmd,
 ;  THIRD-PARTY-NOTICES.md, THIRD-PARTY-LICENSES\, player\licenses\ — LGPL 고지 포함)
@@ -91,3 +96,8 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""VP App (Player)"""; Flags: runhidden; RunOnceId: "DelFw7"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""VP App (PTP Helper)"""; Flags: runhidden; RunOnceId: "DelFw8"
 
+
+[UninstallDelete]
+; 웹 업데이트로 추가된 파일은 설치 로그에 없어 기본 제거에서 누락 → 설치 폴더 통째 정리
+;  (사용자 데이터는 %APPDATA%에 있어 영향 없음)
+Type: filesandordirs; Name: "{app}"

@@ -179,8 +179,8 @@ export class TcpResponseSender {
  */
 export const PROTOCOL_VERSION = '2.0'
 
-// 앱 버전 (package.json과 동기화 — 배포 시 함께 올린다).
-export const APP_VERSION = '0.7.2'
+// 앱 버전 — 빌드 시 package.json에서 주입 (src/version.js)
+export { APP_VERSION } from '../version.js'
 
 /**
  * 이벤트 타입 (서버 → 전 클라이언트 브로드캐스트)
