@@ -785,6 +785,7 @@ const triggerPreloadOnEdit = (playlistId) => {
 const resetScenes = () => {
   clearSceneAudioTimer() // 오디오 전용 장면 자동 전환 타이머 취소 (정지 후 유령 전환 방지)
   clearAllWindowAudioTimers() // 윈도우 모드 오디오 전용 항목 타이머도 전부 취소
+  for (const W of Object.keys(pendingNext)) clearNextFallback(W) // next 폴백 취소
   currentSceneIdx = 0
   sceneEndedWins = new Set()
   pStatus.windowStates = {}
@@ -1178,6 +1179,7 @@ const playWindowItem = (W, seq, start, preload = true) => {
   const entry = seq[start]
   if (!entry) return
   clearWindowAudioTimer(W) // 이전 오디오 전용 타이머 취소
+  clearNextFallback(W) // 명시 재생이 우선 — 대기 중인 next 폴백 해제
   const prev = pStatus.windowStates[W]
 
   // 오디오 전용 항목 — 영상 없음: 창은 정지(배경) + 오디오만 재생 + 길이 타이머로 다음 항목 전환.
@@ -1327,6 +1329,7 @@ const advanceWindowFromEnd = (W, endedSeq) => {
     if (curWasVideo && nextEntry.clip) {
       playerSend({ command: 'next', window_id: W }) // 영상→영상: 프리로드 standby 덱 승격(무지연)
       updateWindowAfterAdvance(W, seq, endedSeq + 1)
+      armNextFallback(W, endedSeq + 1, nextEntry.clip)
     } else {
       playExplicit(endedSeq + 1) // 오디오 전용이 관여 → 명시 재생
     }
@@ -1342,6 +1345,49 @@ const advanceWindowFromEnd = (W, endedSeq) => {
   }
   applyWindowChannelDelays()
   ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+}
+
+// `next` 전환 확인 — 플레이어에 미리 로드된 덱이 없으면 next는 경고("next: no preloaded deck")만
+// 남기고 아무것도 안 해 재생이 멈춘다. 전환(media_changed)이 확인되지 않으면 명시 재생으로 폴백.
+// W → { seqIdx, uuid, timer }. 대기 시간은 프리롤 중인 풀 덱 승격(대용량 파일) + 클립 지연을 감안.
+const pendingNext = {}
+const NEXT_CONFIRM_MS = 8000
+const clearNextFallback = (W) => {
+  if (pendingNext[W]) {
+    clearTimeout(pendingNext[W].timer)
+    delete pendingNext[W]
+  }
+}
+const armNextFallback = (W, seqIdx, clip) => {
+  clearNextFallback(W)
+  const waitMs = NEXT_CONFIRM_MS + (Number(fileForPlayer(clip).delay_ms) || 0)
+  pendingNext[W] = {
+    seqIdx,
+    uuid: clip.uuid,
+    timer: setTimeout(() => fireNextFallback(W, 'not confirmed'), waitMs),
+  }
+}
+const fireNextFallback = (W, why) => {
+  const p = pendingNext[W]
+  if (!p) return
+  clearNextFallback(W)
+  const st = pStatus.windowStates[W]
+  // 그 사이 정지/다른 전환이 있었으면 무시
+  if (!pStatus.playlistMode || !st || st.seqIndex !== p.seqIdx) return
+  const seq = windowItemSequence(pStatus.playlist?.tracks || [], W)
+  if (!seq[p.seqIdx]?.clip) return
+  logger.warn(`Window ${W}: next failed (${why}) — explicit play seq ${p.seqIdx}`)
+  playWindowItem(W, seq, p.seqIdx, false)
+  applyWindowChannelDelays()
+  ioClient.emit('pStatus', { windowStates: pStatus.windowStates })
+}
+// media_changed(창 W, uuid) 수신 — 기다리던 next 전환이 실제로 일어났으면 폴백 해제
+const confirmWindowNext = (W, uuid) => {
+  if (pendingNext[W] && pendingNext[W].uuid === uuid) clearNextFallback(W)
+}
+// 플레이어가 "next: no preloaded deck"을 보고 — 창 id가 없어 대기 중인 전 창을 즉시 폴백
+const onPlayerNextFailed = () => {
+  for (const W of Object.keys(pendingNext)) fireNextFallback(Number(W), 'no preloaded deck')
 }
 
 // advance 후 windowStates[W] 갱신 + 항목 오디오 전환 (이전 정지·새 기동). 영상→영상 next 경로 전용.
@@ -1409,6 +1455,7 @@ const playWindowInPlaylist = async (playlistId, windowId, index = 0) => {
 const stopWindow = (windowId) => {
   const W = Number(windowId)
   clearWindowAudioTimer(W) // 오디오 전용 자동 전환 타이머 취소 (정지 후 유령 전환 방지)
+  clearNextFallback(W)
   playerSend({ command: 'stop', window_id: W })
   const st = pStatus.windowStates[W]
   if (st) stopAudios(st.audioIds)
@@ -1725,6 +1772,8 @@ export {
   switchPlaylistMode,
   startWindowPlaylist,
   advanceWindowOnEnd,
+  confirmWindowNext,
+  onPlayerNextFailed,
   playWindow,
   playWindowInPlaylist,
   stopWindow,

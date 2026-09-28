@@ -9,6 +9,8 @@ import {
   multiWin,
   onSceneWindowEnd,
   advanceWindowOnEnd,
+  confirmWindowNext,
+  onPlayerNextFailed,
 } from '../api/playlists/index.js'
 import {
   stopAllTrackAudios,
@@ -185,6 +187,7 @@ async function handleMediaChanged(data) {
     // 재생 시작(playScene/playWindowItem)이 windowStates[W]를 미리 생성한다. 항목이 없다는 건
     // 그 창이 정지됐다는 뜻 → 뒤늦게 도착한 media_changed로 정지된 창을 되살리지 않는다.
     if (!pStatus.windowStates[W]) return
+    if (data.uuid) confirmWindowNext(W, data.uuid) // 대기 중인 next 전환 확인 → 폴백 해제
     const st = pStatus.windowStates[W]
     if (sceneIdx != null) {
       st.sceneIndex = sceneIdx
@@ -285,6 +288,8 @@ const parsePlayerStatus = async (data) => {
 
       case 'warn':
         logger.warn(`[Player] ${msgData}`)
+        // 미리 로드된 덱 없이 next를 받으면 플레이어는 아무것도 안 한다 → 호스트가 명시 재생으로 폴백
+        if (msgData === 'next: no preloaded deck') onPlayerNextFailed()
         break
 
       case 'debug':
