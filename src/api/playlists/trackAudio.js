@@ -16,21 +16,28 @@ import { ioClient } from '../../web/index.js'
 let currentAudioTrackIdx = -1
 
 const laneSupported = () =>
-  Array.isArray(pStatus.playerFeatures) && pStatus.playerFeatures.includes('audio_track')
+  Array.isArray(pStatus.playerFeatures) &&
+  pStatus.playerFeatures.includes('audio_track')
 
-const emit = () => ioClient.emit('pStatus', { audioTracks: pStatus.audioTracks })
+const emit = () =>
+  ioClient.emit('pStatus', { audioTracks: pStatus.audioTracks })
 
 // 하이드레이션된 audio 항목({id,uuid,filename,path,volume,channel_map,muted,loop}) 하나를 기동
-const startAudio = (audio) => {
+// windowId: 창 귀속 오디오(윈도우 모드 항목)면 그 창 id — 플레이어가 그 창의 출력 디바이스/뮤트를 적용.
+const startAudio = (audio, windowId = null) => {
   const hasChannels = Array.isArray(audio.channels) && audio.channels.length > 0
   playerSend({
     command: 'audio_track_play',
     track_id: audio.id,
+    ...(Number.isInteger(windowId) ? { window_id: windowId } : {}),
     file: { path: audio.path, uuid: audio.uuid },
     volume: audio.volume ?? 100, // 마스터
     // 채널별 우선(channels), 없으면 레거시 channel_map
     channels: hasChannels ? audio.channels : undefined,
-    channel_map: !hasChannels && Array.isArray(audio.channel_map) ? audio.channel_map : undefined,
+    channel_map:
+      !hasChannels && Array.isArray(audio.channel_map)
+        ? audio.channel_map
+        : undefined,
     loop: audio.loop === true,
     muted: audio.muted === true, // 마스터
     delay_ms: Number.isFinite(audio.delay_ms) ? audio.delay_ms : 0, // 오디오 트랙별 시작 지연
@@ -73,7 +80,9 @@ const syncTrackAudios = (trackIdx, force = false) => {
     if (!laneSupported()) return
     for (const a of desired) startAudio(a)
     if (desired.length) {
-      logger.info(`trackAudio: started ${desired.length} audio(s) for track ${trackIdx}`)
+      logger.info(
+        `trackAudio: started ${desired.length} audio(s) for track ${trackIdx}`,
+      )
       emit()
     }
     return
@@ -119,13 +128,21 @@ const syncTrackAudios = (trackIdx, force = false) => {
     const nextChannels = Array.isArray(a.channels) ? a.channels : null
     if (nextChannels) {
       if (JSON.stringify(nextChannels) !== JSON.stringify(cur.channels)) {
-        playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextChannels })
+        playerSend({
+          command: 'audio_track_set_channel_map',
+          track_id: a.id,
+          map: nextChannels,
+        })
         cur.channels = nextChannels
       }
     } else {
       const nextMap = Array.isArray(a.channel_map) ? a.channel_map : null
       if (JSON.stringify(nextMap) !== JSON.stringify(cur.channel_map)) {
-        playerSend({ command: 'audio_track_set_channel_map', track_id: a.id, map: nextMap || [] })
+        playerSend({
+          command: 'audio_track_set_channel_map',
+          track_id: a.id,
+          map: nextMap || [],
+        })
         cur.channel_map = nextMap
       }
     }
@@ -136,8 +153,17 @@ const syncTrackAudios = (trackIdx, force = false) => {
 // 활성 덱(임베디드 오디오)의 라우팅/볼륨/뮤트 라이브 변경. live_routing capability 필요.
 // streams(채널별 스트림>채널) 우선, 없으면 레거시 {channel_map,volume,muted}.
 // window_id: 멀티윈도우에서 대상 창의 덱 지정(§6.2). 미지정이면 기본 창.
-const setDeckAudioLive = ({ window_id, streams, channel_map, volume, muted } = {}) => {
-  if (!Array.isArray(pStatus.playerFeatures) || !pStatus.playerFeatures.includes('live_routing')) {
+const setDeckAudioLive = ({
+  window_id,
+  streams,
+  channel_map,
+  volume,
+  muted,
+} = {}) => {
+  if (
+    !Array.isArray(pStatus.playerFeatures) ||
+    !pStatus.playerFeatures.includes('live_routing')
+  ) {
     return false
   }
   const cmd = { command: 'set_deck_audio' }
@@ -155,12 +181,12 @@ const setDeckAudioLive = ({ window_id, streams, channel_map, volume, muted } = {
 // 오디오를 동시에 독립 재생한다. 아래 두 헬퍼는 "특정 오디오 리스트"를 id 기준으로 기동/정지한다
 // (오디오 id는 영속·고유 = aud-<uuid> 라 창 간 충돌 없음). 창 컨트롤러가 항목 전환 시 이전 항목의
 // audioIds를 stopAudios, 새 항목을 startAudios 한다.
-const startAudios = (audios) => {
+const startAudios = (audios, windowId = null) => {
   const ids = []
   if (!laneSupported()) return ids
   for (const a of audios || []) {
     if (!a || !a.path || !a.id) continue
-    startAudio(a)
+    startAudio(a, windowId)
     ids.push(a.id)
   }
   if (ids.length) emit()
@@ -183,7 +209,8 @@ const stopAllTrackAudios = () => {
   currentAudioTrackIdx = -1
   const ids = Object.keys(pStatus.audioTracks || {})
   if (ids.length === 0) return
-  for (const id of ids) playerSend({ command: 'audio_track_stop', track_id: id })
+  for (const id of ids)
+    playerSend({ command: 'audio_track_stop', track_id: id })
   pStatus.audioTracks = {}
   emit()
 }
@@ -207,7 +234,8 @@ const resumeTrackAudios = () => {
 const pauseAudios = (ids) => {
   for (const id of ids || []) {
     const t = pStatus.audioTracks[id]
-    if (t && t.is_playing) playerSend({ command: 'audio_track_pause', track_id: id })
+    if (t && t.is_playing)
+      playerSend({ command: 'audio_track_pause', track_id: id })
   }
 }
 const resumeAudios = (ids) => {
@@ -226,7 +254,11 @@ const setTrackAudioLive = (audioId, { volume, muted, channels } = {}) => {
   const t = pStatus.audioTracks?.[audioId]
   if (!t) return false
   if (Array.isArray(channels)) {
-    playerSend({ command: 'audio_track_set_channel_map', track_id: audioId, map: channels })
+    playerSend({
+      command: 'audio_track_set_channel_map',
+      track_id: audioId,
+      map: channels,
+    })
     t.channels = channels
   }
   if (volume !== undefined) t.volume = volume

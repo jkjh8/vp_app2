@@ -5,6 +5,7 @@ import { dbPlaylists, dbFiles, dbStatus } from '../../db/index.js'
 import { playerSend, isPlayerConnected } from '../../player/index.js'
 import { ioClient } from '../../web/index.js'
 import { playFile } from '../player/index.js'
+import { createWindowCommand } from '../player/windows.js'
 import {
   syncTrackAudios,
   setDeckAudioLive,
@@ -805,16 +806,7 @@ const ensureWindows = (windowIds) => {
     if (existing.has(W)) continue
     const cfg = (pStatus.windows || []).find((w) => w.id === W)
     if (!cfg) continue // 미설정 창은 생성하지 않음 (전체화면 검정 창 방지)
-    playerSend({
-      command: 'create_window',
-      window_id: W,
-      monitor_index: cfg.monitorIndex ?? -1,
-      x: cfg.x ?? 0,
-      y: cfg.y ?? 0,
-      width: cfg.width ?? 0,
-      height: cfg.height ?? 0,
-      aspect_mode: cfg.aspectMode ?? 'letterbox',
-    })
+    playerSend(createWindowCommand(cfg))
     if (cfg.backgroundColor)
       playerSend({ command: 'background_color', window_id: W, color: cfg.backgroundColor })
   }
@@ -1186,7 +1178,7 @@ const playWindowItem = (W, seq, start, preload = true) => {
   if (!entry.clip) {
     playerSend({ command: 'stop', window_id: W }) // 이 창 영상 정지(배경색). 풀도 해제됨.
     if (prev) stopAudios(prev.audioIds)
-    const audioIds = startAudios(entry.audios)
+    const audioIds = startAudios(entry.audios, W)
     pStatus.windowStates[W] = {
       seqIndex: start,
       trackId: start,
@@ -1221,7 +1213,7 @@ const playWindowItem = (W, seq, start, preload = true) => {
     next_time: nextFile ? resolveImageTime(seq[start + 1].clip) : undefined,
   })
   if (prev) stopAudios(prev.audioIds)
-  const audioIds = startAudios(entry.audios)
+  const audioIds = startAudios(entry.audios, W)
   pStatus.windowStates[W] = {
     seqIndex: start,
     trackId: start,
@@ -1396,7 +1388,7 @@ const updateWindowAfterAdvance = (W, seq, newSeqIdx) => {
   clearWindowAudioTimer(W)
   const st = pStatus.windowStates[W] || { activePlayerId: 0, audioIds: [], player: {} }
   stopAudios(st.audioIds)
-  st.audioIds = startAudios(seq[idx].audios)
+  st.audioIds = startAudios(seq[idx].audios, W)
   st.seqIndex = idx
   st.trackId = idx
   st.uuid = seq[idx].clip?.uuid ?? null

@@ -20,6 +20,7 @@ import { app } from '../runtime.js'
 import { broadcastEvent } from '../tcp/index.js'
 import { TCP_EVENTS as EVENTS } from '../utils/tcpResponse.js'
 import { getSource, toEngineSource } from '../api/player/sources.js'
+import { createWindowCommand, syncWindowMonitors } from '../api/player/windows.js'
 
 let lastEndReachedEvent = null // { key, at }
 const END_REACHED_DEDUP_MS = 1000
@@ -396,6 +397,7 @@ const parsePlayerStatus = async (data) => {
         pStatus.displays = msgData.displays || []
         ioClient.emit('pStatus', { displays: pStatus.displays })
         logger.info(`Displays updated: ${pStatus.displays.length} monitors`)
+        await syncWindowMonitors() // 창 설정을 고정 모니터 key에 맞춤 (마이그레이션 + index/이름 갱신)
         break
 
       case 'set_display':
@@ -452,17 +454,7 @@ const parsePlayerStatus = async (data) => {
           })
           for (const w of pStatus.windows || []) {
             if (!w) continue // 주 창 개념 폐지 — 설정된 모든 창을 생성
-            playerSend({
-              command: 'create_window',
-              window_id: w.id,
-              monitor_index: w.monitorIndex ?? -1,
-              x: w.x ?? 0,
-              y: w.y ?? 0,
-              width: w.width ?? 0,
-              height: w.height ?? 0,
-              aspect_mode: w.aspectMode ?? 'letterbox',
-              z_order: w.zOrder ?? 0,
-            })
+            playerSend(createWindowCommand(w))
             if (w.backgroundColor)
               playerSend({ command: 'background_color', window_id: w.id, color: w.backgroundColor })
           }

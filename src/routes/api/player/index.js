@@ -20,6 +20,7 @@ import {
   createWindow,
   updateWindow,
   deleteWindow,
+  setWindowMute,
   setPreloadConfig,
   setChannelDelays,
   listPresets,
@@ -29,7 +30,10 @@ import {
   deletePreset,
   applyPreset,
 } from '../../../api/player/windows.js'
-import { configureSync, awaitRunningTime } from '../../../api/player/peerSync.js'
+import {
+  configureSync,
+  awaitRunningTime,
+} from '../../../api/player/peerSync.js'
 import pStatus from '../../../pStatus.js'
 import { logger } from '../../../logger/index.js'
 
@@ -142,9 +146,12 @@ router.put('/master_volume/live', async (req, res) => {
 router.get('/repeat', async (req, res) => {
   try {
     // windowId 지정 시 그 창만(윈도우 모드) 토글/설정 — 전역 repeat와 독립.
-    const windowId = req.query.windowId != null ? Number(req.query.windowId) : null
+    const windowId =
+      req.query.windowId != null ? Number(req.query.windowId) : null
     const mode = await setRepeat(null, windowId)
-    res.status(200).json({ message: `Repeat mode set to: ${mode}`, mode, windowId })
+    res
+      .status(200)
+      .json({ message: `Repeat mode set to: ${mode}`, mode, windowId })
   } catch (error) {
     logger.error('Error occurred while setting repeat mode:', error)
     res.status(500).json({ error: 'Failed to set repeat mode' })
@@ -227,6 +234,23 @@ router.put('/windows/:id', async (req, res) => {
   } catch (error) {
     logger.error('Error updating window:', error)
     res.status(500).json({ error: 'Failed to update window' })
+  }
+})
+
+// 창 오디오 전체 뮤트 { muted: boolean } (생략 시 토글)
+router.put('/windows/:id/mute', async (req, res) => {
+  try {
+    const cur = (pStatus.windows || []).find(
+      (w) => w.id === Number(req.params.id),
+    )
+    if (!cur) return res.status(404).json({ error: 'window not found' })
+    const muted =
+      typeof req.body?.muted === 'boolean' ? req.body.muted : !cur.muted
+    const win = await setWindowMute(req.params.id, muted)
+    res.status(200).json({ window: win })
+  } catch (error) {
+    logger.error('Error muting window:', error)
+    res.status(500).json({ error: 'Failed to mute window' })
   }
 })
 

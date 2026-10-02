@@ -40,6 +40,7 @@ import {
   listWindows,
   createWindow,
   updateWindow,
+  setWindowMute,
   deleteWindow,
   setPreloadConfig,
   setChannelDelays,
@@ -294,7 +295,7 @@ export const commands = [
   {
     name: 'window.create',
     category: 'window',
-    description: '출력 창 생성 (모니터/좌표/크기/비율/배경/z순서, 선택적 라이브 소스 귀속)',
+    description: '출력 창 생성 (모니터/좌표/크기/비율/배경/z순서, 선택적 라이브 소스 귀속, audioOnly=화면 송출 없는 오디오 전용 창)',
     params: [
       { name: 'name', type: 'string' },
       { name: 'monitorIndex', type: 'number', jsonAliases: ['monitor_index'] },
@@ -306,6 +307,9 @@ export const commands = [
       { name: 'backgroundColor', type: 'string', jsonAliases: ['background_color'] },
       { name: 'zOrder', type: 'number', jsonAliases: ['z_order'] },
       { name: 'sourceId', type: 'string', jsonAliases: ['source_id'] },
+      { name: 'audioOnly', type: 'boolean', jsonAliases: ['audio_only'] },
+      { name: 'audioDevice', type: 'string', jsonAliases: ['audio_device'] },
+      { name: 'muted', type: 'boolean' },
     ],
     handler: async (params) => {
       const win = await createWindow(params)
@@ -327,11 +331,28 @@ export const commands = [
       { name: 'aspectMode', type: 'string', jsonAliases: ['aspect_mode'] },
       { name: 'backgroundColor', type: 'string', jsonAliases: ['background_color'] },
       { name: 'zOrder', type: 'number', jsonAliases: ['z_order'] },
+      { name: 'audioOnly', type: 'boolean', jsonAliases: ['audio_only'] },
+      { name: 'audioDevice', type: 'string', jsonAliases: ['audio_device'] },
     ],
     handler: async ({ id, ...patch }) => {
       const win = await updateWindow(id, patch)
       if (!win) fail(`Window ${id} not found`, 'NOT_FOUND')
       return { message: `Window ${id} updated`, data: { window: win } }
+    },
+  },
+  {
+    name: 'window.mute',
+    category: 'window',
+    description: '창 오디오 전체 뮤트/해제 (muted 생략 시 토글)',
+    params: [
+      { name: 'id', type: 'number', required: true, jsonAliases: ['windowId'] },
+      { name: 'muted', type: 'boolean' },
+    ],
+    handler: async ({ id, muted }) => {
+      const cur = (pStatus.windows || []).find((w) => w.id === Number(id))
+      if (!cur) fail(`Window ${id} not found`, 'NOT_FOUND')
+      const win = await setWindowMute(id, typeof muted === 'boolean' ? muted : !cur.muted)
+      return { message: `Window ${id} ${win.muted ? 'muted' : 'unmuted'}`, data: { window: win } }
     },
   },
   {
