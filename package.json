@@ -1,9 +1,10 @@
 {
   "name": "vp_app2",
   "version": "0.7.7",
+  "author": "jkjh8",
+  "license": "GPL-3.0-only",
   "main": "src/main.js",
   "type": "module",
-  "license": "MIT",
   "devDependencies": {
     "cross-env": "^7.0.3",
     "esbuild": "^0.28.1",

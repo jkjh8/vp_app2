@@ -31,8 +31,18 @@ const cleanupLegacyStatus = async () => {
   }
 }
 
+// 포트는 서버가 이미 바인딩한 뒤 바뀌면 안 되므로 부팅 시 첫 로드에서만 적용한다
+// (GET /api/status 가 매번 이 함수를 다시 호출함). 변경값은 다음 실행부터 반영.
+let portsApplied = false
+const validPort = (v) => {
+  const n = Number(v)
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null
+}
+
 const updateStatusFromDb = async () => {
   const st = await dbStatus.find({})
+  const applyPorts = !portsApplied
+  portsApplied = true
   for (const status of st) {
     // ??: 값이 비어있는 DB 레코드가 기본값을 undefined로 덮어쓰지 않게 함
     // (예: backgroundColor undefined → color 없는 background_color 명령이 발신됨)
@@ -60,6 +70,16 @@ const updateStatusFromDb = async () => {
         break
       case 'tcpPort':
         pStatus.tcpPort = status.value ?? pStatus.tcpPort
+        break
+      case 'webPort':
+        // VP_WEB_PORT 환경변수가 있으면 그쪽이 우선
+        if (applyPorts && !process.env.VP_WEB_PORT && validPort(status.value)) {
+          pStatus.webPort = validPort(status.value)
+        }
+        break
+      case 'tcpSimplePort':
+      case 'tcpJsonPort':
+        if (applyPorts && validPort(status.value)) pStatus[status.type] = validPort(status.value)
         break
       case 'imageTime':
         pStatus.imageTime = status.value ?? pStatus.imageTime

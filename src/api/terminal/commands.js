@@ -9,6 +9,7 @@
 // 핸들러가 throw하면 dispatcher가 표준 에러 봉투로 변환한다(err.code 있으면 사용).
 import pStatus from '../../pStatus.js'
 import { dbFiles, dbStatus } from '../../db/index.js'
+import { amxOf } from '../../utils/amx.js'
 import { broadcastEvent } from '../../tcp/index.js'
 import { PROTOCOL_VERSION, APP_VERSION, TCP_EVENTS } from '../../utils/tcpResponse.js'
 import {
@@ -82,7 +83,7 @@ const simplifyTrack = (track, index) =>
     : {
         trackId: index,
         uuid: track.uuid,
-        amx: track.amx,
+        amx: amxOf(track),
         filename: track.filename || track.originalname,
         time: track.time || 0,
         mimetype: track.mimetype,
@@ -818,7 +819,7 @@ export const commands = [
     description: '전체 파일 목록 조회',
     params: [],
     handler: async () => {
-      const files = await dbFiles.find()
+      const files = (await dbFiles.find()).map((f) => ({ ...f, amx: amxOf(f) }))
       return { message: `Found ${files.length} files`, data: { files, count: files.length } }
     },
   },

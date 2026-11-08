@@ -7,6 +7,7 @@ import { getTmpPath, getMediaPath } from './folders.js'
 import { playerRequest } from '../../player/index.js'
 
 import { dbFiles, dbFolders, dbPlaylists } from '../../db/index.js'
+import { convertforAMX } from '../../utils/amx.js'
 
 // 메타데이터/썸네일은 네이티브 플레이어(GStreamer)에 위임한다.
 // setupFFmpeg는 하위호환용 no-op (main.js가 호출).
@@ -196,17 +197,6 @@ const insertFileWithUniqueNumber = async (fileData) => {
     }
   }
   throw new Error('Failed to insert file with unique number after retries')
-}
-
-// utf-8을 amx tp에서 사용하는 스트링으로 변환하는 함수
-const convertforAMX = (str) => {
-  const encoder = new TextEncoder('utf-16le')
-  const encoded = encoder.encode(str)
-  const hexArray = Array.from(encoded)
-    .map((byte) => byte.toString(16).padStart(4, '0'))
-    .join(',')
-
-  return hexArray
 }
 
 // 파일들을 지정한 논리 폴더로 이동 (folderId만 갱신, 디스크는 그대로). folderId=null=루트.

@@ -10,8 +10,34 @@
 - `THIRD-PARTY-LICENSES\npm-backend.txt` — Node 백엔드 npm 패키지 라이센스 전문
 - `THIRD-PARTY-LICENSES\npm-webui.txt` — 웹 UI(SPA) npm 패키지 라이센스 전문
 
+저장소(소스 코드)에서는 아래 위치에 라이센스 원문이 있습니다:
+
+- `LICENSE` — VP App 소스 코드 라이센스 (GPL-3.0)
+- `licenses\npm-webui.txt` — `public\spa\`(웹 UI 빌드 산출물)에 포함된 npm 패키지 라이센스 전문
+- `licenses\Apache-2.0.txt` — Roboto, Material Icons 폰트 라이센스 원문
+- `licenses\OFL-1.1-NanumGothic.txt` — 나눔고딕 폰트 라이센스 원문
+
 > DISCLAIMER: 이 문서는 최선의 노력으로 작성된 것이며 법률 자문이 아닙니다.
 > 상업적 배포 시 라이센스 준수 및 코덱 특허에 관하여 변호사의 검토를 받으십시오.
+
+---
+
+## 0. VP App 자체의 라이센스
+
+| 구성 | 라이센스 | 소스 코드 |
+|---|---|---|
+| 제어 서버 (`server.cjs`, 이 저장소) | GPL-3.0-only | https://github.com/jkjh8/vp_app2 |
+| 운영자 웹 UI (`public\spa\`) | GPL-3.0-only | https://github.com/jkjh8/vp_ui |
+| 네이티브 플레이어 (`player\vplayer.exe`) | 독점 (별도 프로그램) | 비공개 |
+
+- 제어 서버와 웹 UI는 GNU General Public License v3.0으로 배포됩니다. 배포본에 대응하는
+  소스 코드는 위 저장소의 같은 버전 태그(예: `v0.7.7`)에서 받을 수 있습니다.
+- `server.cjs`는 이 저장소의 소스와 npm 패키지를 하나로 묶은(esbuild) 파일이며, 웹 UI는
+  vp_ui 저장소를 빌드한 결과입니다. 두 결과물 모두 위 소스와 공개된 빌드 스크립트로 다시 만들 수 있습니다.
+- 네이티브 플레이어는 제어 서버와 **별도 프로세스로 실행되고 로컬 TCP 소켓으로만 통신하는
+  독립 프로그램**입니다. 제어 서버의 코드를 포함하거나 링크하지 않으므로 GPL-3.0 제5조의
+  "집합물(aggregate)"에 해당하며, GPL-3.0이 적용되지 않습니다.
+- GPL-3.0과 아래 서드파티 라이센스(MIT, ISC, BSD, Apache-2.0, LGPL-2.1+, OFL-1.1)는 서로 충돌하지 않습니다.
 
 ---
 
@@ -83,9 +109,19 @@ Visual C++ Redistributable의 일부로, Visual Studio 재배포 조건에 따�
 |---|---|---|
 | 런타임 | Node.js | MIT (및 OpenSSL/V8/libuv 등 permissive 종속) |
 | 백엔드 npm | express, socket.io, winston, multer, nedb-promises, cors, cookie-parser, morgan, uuid 등 (전 종속 트리) | 전부 permissive (MIT/ISC/BSD/Apache-2.0) — 전문은 `THIRD-PARTY-LICENSES\npm-backend.txt` |
-| 웹 UI (SPA) | Vue 3, Quasar, Pinia, axios, socket.io-client, vuedraggable 등 | 전부 permissive (MIT/BSD/Apache-2.0) — 전문은 `THIRD-PARTY-LICENSES\npm-webui.txt` |
+| 웹 UI (SPA) | Vue 3, Quasar, Pinia, axios, socket.io-client, vuedraggable 등 | 전부 permissive (MIT/BSD/Apache-2.0) — 전문은 `THIRD-PARTY-LICENSES\npm-webui.txt` (저장소: `licenses\npm-webui.txt`) |
 
 카피레프트(GPL/LGPL/AGPL/MPL) npm 패키지는 배포 대상에 **포함되지 않습니다.**
+
+### 2.1 웹 UI 폰트
+
+| 폰트 | 라이센스 | 저작권 | 원문 |
+|---|---|---|---|
+| 나눔고딕 (NanumGothic) | SIL Open Font License 1.1 | © 2010 NAVER Corporation | `licenses\OFL-1.1-NanumGothic.txt` |
+| Roboto | Apache License 2.0 | © Google | `licenses\Apache-2.0.txt` |
+| Material Icons | Apache License 2.0 | © Google | `licenses\Apache-2.0.txt` |
+
+폰트는 수정 없이 웹 UI에 포함되며, OFL-1.1에 따라 폰트 자체를 단독으로 판매하지 않습니다.
 
 ---
 

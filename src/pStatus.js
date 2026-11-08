@@ -21,6 +21,8 @@ let pStatus = {
   tcpJsonPort: 15001,
   // VP_WEB_PORT: 개발 환경 포트 충돌(예: VS Code 프리뷰가 3000 점유) 대응용 오버라이드
   webPort: Number(process.env.VP_WEB_PORT) || 3000,
+  // 이미지 기본 표시 시간(초) — 트랙에 시간이 없고 붙은 오디오도 없을 때 사용 (1~60)
+  imageTime: 5,
   startOnPlay: false,
   startOnPlaylistId: null,
   // Windows 시작 시 앱 자동 실행 (HKCU Run 키 "VP App", 관리자 불필요). 사용자 의도 영속값 — api/system/autostart.js.

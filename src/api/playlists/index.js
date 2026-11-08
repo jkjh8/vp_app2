@@ -124,7 +124,7 @@ const isImageFile = (f) =>
 // - time이 명시적으로(0이 아닌 값) 설정돼 있으면 그 값을 강제 사용.
 // - time이 0/미설정이면 붙어있는 추가 오디오의 길이(metadata.format.duration, 초 단위
 //   문자열 — vplayer probe_media가 std::to_string(double)로 내려줌)를 사용.
-// - 오디오가 없거나 길이를 못 구하면 기본값 5초로 폴백.
+// - 오디오가 없거나 길이를 못 구하면 설정의 이미지 표시 시간(pStatus.imageTime, 기본 5초)으로 폴백.
 const resolveImageTime = (track) => {
   if (!isImageFile(track)) return undefined
   if (track.time) return track.time
@@ -133,7 +133,8 @@ const resolveImageTime = (track) => {
     const dur = parseFloat(a?.metadata?.format?.duration)
     if (Number.isFinite(dur) && dur > 0) return dur
   }
-  return 5
+  const def = Number(pStatus.imageTime)
+  return def > 0 ? def : 5
 }
 
 const getPlaylist = async (playlistId) => {
@@ -1613,7 +1614,7 @@ const playlistPlay = async (playlistId, trackIdx = 0) => {
       file: pStatus.file,
     })
 
-    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 설정 기본값)
     const currentTime = resolveImageTime(currentTrack)
     const nextTime = resolveImageTime(nextTrack)
 
@@ -1667,7 +1668,7 @@ const playNextTrack = async () => {
 
     ioClient.emit('pStatus', { trackId: pStatus.trackId })
 
-    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    // 현재/다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 설정 기본값)
     const currentTime = resolveImageTime(currentTrack)
     const nextTime = resolveImageTime(nextTrack)
 
@@ -1712,7 +1713,7 @@ const preloadNextTrack = async () => {
       return null
     }
 
-    // 다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 기본 5초)
+    // 다음 트랙의 이미지 표시 시간 (time 강제 지정 > 추가 오디오 길이 > 설정 기본값)
     const nextTime = resolveImageTime(nextTrack)
 
     playerSend({
