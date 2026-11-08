@@ -69,7 +69,7 @@ AMX/Crestron에서는 문자열 조립이 쉬운 **Simple 포트(15000)** 사용
   "message": "Connected to VP Server (Simple Command Port)",
   "data": {
     "serverId": "vp_app2",
-    "appVersion": "0.7.7",
+    "appVersion": "0.7.8",
     "protocolVersion": "2.0",
     "clientId": "192.168.0.50:49152",
     "port": "simple",
@@ -1223,7 +1223,7 @@ autostart.set,1\n
 
 ```json
 {
-  "appVersion": "0.7.7",
+  "appVersion": "0.7.8",
   "protocolVersion": "2.0",
   "ready": true,
   "playlistMode": true,
@@ -1259,7 +1259,7 @@ autostart.set,1\n
 
 #### system.version
 
-응답 `data`: `{ "protocolVersion": "2.0", "appVersion": "0.7.7" }`. 가벼우므로 연결 확인(하트비트)용으로 적합합니다.
+응답 `data`: `{ "protocolVersion": "2.0", "appVersion": "0.7.8" }`. 가벼우므로 연결 확인(하트비트)용으로 적합합니다.
 
 #### system.capabilities
 
