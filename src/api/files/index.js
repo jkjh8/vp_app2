@@ -1,53 +1,47 @@
-import ffmpeg from 'fluent-ffmpeg'
-import ffmpegPath from 'ffmpeg-static'
-import ffprobe from 'ffprobe-static'
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { logger } from '../../logger/index.js'
 
 import { getTmpPath, getMediaPath } from './folders.js'
-import { generateThumbnail, resizeImage } from './thumbnail.js'
+import { playerRequest } from '../../player/index.js'
 
-import { dbFiles, dbPlaylists } from '../../db/index.js'
+import { dbFiles, dbFolders, dbPlaylists } from '../../db/index.js'
 
+// 메타데이터/썸네일은 네이티브 플레이어(GStreamer)에 위임한다.
+// setupFFmpeg는 하위호환용 no-op (main.js가 호출).
 const setupFFmpeg = () => {
-  let ffmpegExecutablePath = ffmpegPath
-  let ffprobeExecutablePath = ffprobe.path
-  if (ffmpegExecutablePath.includes('app.asar')) {
-    ffmpegExecutablePath = ffmpegExecutablePath.replace(
-      'app.asar',
-      'app.asar.unpacked',
-    )
-  }
-  if (ffprobeExecutablePath.includes('app.asar')) {
-    ffprobeExecutablePath = ffprobeExecutablePath.replace(
-      'app.asar',
-      'app.asar.unpacked',
-    )
-  }
-  ffmpeg.setFfmpegPath(ffmpegExecutablePath)
-  ffmpeg.setFfprobePath(ffprobeExecutablePath)
+  logger.info('media probe/thumbnail delegated to native player (GStreamer)')
 }
 
-// getVideoMetadata 함수는 비디오 파일의 메타데이터를 가져오는 Promise를 반환합니다.
-const getMetadata = (filePath) => {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        // logger.error('Error getting video metadata:', err)
-        reject(err)
-      } else {
-        resolve(metadata)
-      }
-    })
+// 네이티브 플레이어로 메타데이터 프로브 (ffprobe 대체). 실패해도 업로드는 진행.
+const getMetadata = async (filePath) => {
+  const res = await playerRequest('probe_media', { path: filePath }, 30000)
+  if (!res || !res.ok) {
+    logger.warn(`probe_media failed for ${filePath}: ${res && res.error}`)
+    return {} // 메타데이터는 표시용 — 실패 시 빈 객체로 계속
+  }
+  return { format: res.format, streams: res.streams }
+}
+
+// 네이티브 플레이어로 썸네일 생성 (ffmpeg 대체). 결과 경로를 즉시 반환하고
+// 생성은 백그라운드로 진행(fire-and-forget). 0=무한 이미지 대비 at_sec.
+const makeThumbnail = (filePath, outputDir, isImage) => {
+  const baseName = path.parse(filePath).name
+  const thumbnailPath = path.join(outputDir, `thumbnail-${baseName}.png`)
+  playerRequest(
+    'make_thumbnail',
+    { path: filePath, out: thumbnailPath, is_image: isImage, at_sec: 5, width: 320 },
+    30000,
+  ).then((r) => {
+    if (!r || !r.ok) logger.warn(`make_thumbnail failed for ${filePath}: ${r && r.error}`)
   })
+  return thumbnailPath
 }
 
 // 파일 등록 시 중복되지 않는 숫자(순번) 생성 함수
 const getNextFileNumber = async () => {
   try {
-    // cfind()를 사용하여 cursor 반환
     const lastFiles = await dbFiles
       .find({})
       .sort({ number: -1 })
@@ -64,7 +58,7 @@ const getNextFileNumber = async () => {
 // number만 미리 등록(예약)
 const reserveFileNumber = async () => {
   const number = await getNextFileNumber()
-  // 임시로 uuid만 넣고 number만 등록
+  // reserved 자리표시 문서 — 파일 정보는 업로드 후처리에서 채운다
   const uuid = uuidv4()
   await dbFiles.insert({
     uuid,
@@ -76,12 +70,43 @@ const reserveFileNumber = async () => {
   return { uuid, number }
 }
 
-// update된 파일 후처리 하기
-const postProcessFiles = async (files) => {
+// 여러 파일에 대해 번호를 일괄 예약
+const reserveMultipleFileNumbers = async (count) => {
+  const startNumber = await getNextFileNumber()
+  const reservations = []
+
+  // 모든 예약 데이터를 먼저 생성
+  for (let i = 0; i < count; i++) {
+    const uuid = uuidv4()
+    const number = startNumber + i
+    reservations.push({
+      uuid,
+      number,
+      reserved: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  }
+
+  // 한 번에 모두 삽입
+  await dbFiles.insert(reservations)
+
+  return reservations.map((r) => ({ uuid: r.uuid, number: r.number }))
+}
+
+// update된 파일 후처리 하기 (folderId: 업로드 대상 논리 폴더, null=루트)
+const postProcessFiles = async (files, folderId = null) => {
   const mediaPath = getMediaPath()
   const tmpPath = getTmpPath()
+  const targetFolderId = folderId === undefined || folderId === '' ? null : folderId
 
-  for (const file of files) {
+  // 모든 파일에 대해 번호를 미리 예약
+  const reservations = await reserveMultipleFileNumbers(files.length)
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    const { uuid, number } = reservations[i]
+
     try {
       let thumbnailPath = null
       const {
@@ -106,27 +131,23 @@ const postProcessFiles = async (files) => {
       const decodedFilename = safeDecode(filename)
       const decodedFieldname = safeDecode(fieldname)
 
-      // number와 uuid 미리 예약
-      const { uuid, number } = await reserveFileNumber()
-
-      // metadata를 가져오기
-      const metadata = await getMetadata(filePath)
       // mediaPath아래 uuid 폴더 만들기
       const uuidFolderPath = path.join(mediaPath, uuid)
       await fs.promises.mkdir(uuidFolderPath, { recursive: true })
 
       // Windows에서 한글 경로 문제 방지: Buffer.from(str, 'utf8').toString() 사용
-      // 단, Node.js는 기본적으로 UTF-8을 지원하므로, 문제가 계속된다면 파일시스템/환경 문제일 수 있음
       const safeFileName = Buffer.from(decodedFieldname, 'utf8').toString()
       const newFilePath = path.join(uuidFolderPath, safeFileName)
 
-      // Move the file to the new location
+      // 최종 위치로 이동한 뒤 프로브/썸네일 (플레이어가 최종 경로를 읽음)
       await fs.promises.rename(filePath, newFilePath)
 
-      if (mimetype.startsWith('video/')) {
-        thumbnailPath = generateThumbnail(newFilePath, uuidFolderPath)
-      } else if (mimetype.startsWith('image/')) {
-        thumbnailPath = resizeImage(newFilePath, uuidFolderPath)
+      // metadata (표시용) — 네이티브 플레이어 GstDiscoverer, 실패해도 계속
+      const metadata = await getMetadata(newFilePath)
+
+      const isImage = mimetype.startsWith('image/')
+      if (mimetype.startsWith('video/') || isImage) {
+        thumbnailPath = makeThumbnail(newFilePath, uuidFolderPath, isImage)
       }
 
       // 예약된 number와 uuid로 파일 정보 업데이트
@@ -135,7 +156,7 @@ const postProcessFiles = async (files) => {
         {
           $set: {
             reserved: false,
-            // fieldname: decodedFieldname,
+            id: String(number), // 기본적으로 number를 id로 변환
             filename: decodedFilename,
             originalname: decodedOriginalname,
             amx: convertforAMX(decodedFilename),
@@ -145,6 +166,7 @@ const postProcessFiles = async (files) => {
             metadata,
             thumbnail: thumbnailPath,
             is_image: mimetype.startsWith('image/'),
+            folderId: targetFolderId,
             updatedAt: new Date(),
           },
         },
@@ -187,21 +209,62 @@ const convertforAMX = (str) => {
   return hexArray
 }
 
+// 파일들을 지정한 논리 폴더로 이동 (folderId만 갱신, 디스크는 그대로). folderId=null=루트.
+const moveFilesToFolder = async (uuids, folderId) => {
+  const list = Array.isArray(uuids) ? uuids : [uuids]
+  if (list.length === 0) return 0
+  const target = folderId === undefined || folderId === '' ? null : folderId
+  if (target !== null) {
+    const exists = await dbFolders.findOne({ _id: target })
+    if (!exists) {
+      const err = new Error('대상 폴더를 찾을 수 없습니다.')
+      err.status = 404
+      throw err
+    }
+  }
+  return await dbFiles.update(
+    { uuid: { $in: list } },
+    { $set: { folderId: target } },
+    { multi: true },
+  )
+}
+
+// 여러 파일을 한 번에 삭제 (각 uuid 폴더를 디스크에서 제거 + DB 문서 삭제).
+// 개별 실패는 로깅 후 계속 진행. 반환: 실제 삭제된 DB 문서 수.
+const deleteFilesByUuids = async (uuids) => {
+  const list = Array.isArray(uuids) ? uuids : [uuids]
+  if (list.length === 0) return 0
+  const mediaPath = getMediaPath()
+  let removed = 0
+  for (const uuid of list) {
+    try {
+      // rmSync(force): 폴더가 이미 없어도 통과 — 디스크/DB가 어긋난 유령 문서도 지울 수 있게.
+      const fileDir = path.join(mediaPath, uuid)
+      fs.rmSync(fileDir, { recursive: true, force: true })
+      removed += (await dbFiles.remove({ uuid })) || 0
+    } catch (error) {
+      logger.error(`Error deleting file ${uuid}: ${error}`)
+    }
+  }
+  return removed
+}
+
 const resetAllMediaFiles = async () => {
   const mediaPath = getMediaPath()
   try {
-    // mediaPath 아래 logo폴더를 제외한 모든 파일과 폴더를 삭제
+    // mediaPath 아래 모든 파일과 폴더를 삭제
     const files = await fs.promises.readdir(mediaPath, { withFileTypes: true })
     for (const file of files) {
       const filePath = path.join(mediaPath, file.name)
-      if (file.isDirectory() && file.name !== 'logo') {
+      if (file.isDirectory()) {
         await fs.promises.rmdir(filePath, { recursive: true })
-      } else if (file.name !== 'logo') {
+      } else {
         await fs.promises.unlink(filePath)
       }
     }
     // dbFiles초기화
     await dbFiles.remove({}, { multi: true })
+    await dbFolders.remove({}, { multi: true })
     await dbPlaylists.remove({}, { multi: true })
   } catch (error) {
     logger.error('Error resetting media files:', error)
@@ -214,5 +277,7 @@ export {
   postProcessFiles,
   insertFileWithUniqueNumber,
   convertforAMX,
+  moveFilesToFolder,
+  deleteFilesByUuids,
   resetAllMediaFiles,
 }

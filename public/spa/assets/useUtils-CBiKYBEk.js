@@ -1,1 +1,0 @@
-const e=t=>{if(!t)return"0 B";const a=Math.floor(Math.log(t)/Math.log(1024));return`${(t/Math.pow(1024,a)).toFixed(2)} ${["B","KB","MB","GB"][a]}`},r=t=>t.charAt(0).toUpperCase()+t.slice(1);export{r as f,e as h};

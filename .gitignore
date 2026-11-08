@@ -5,6 +5,7 @@ node_modules
 *.exe
 build
 dist
+dist-node
 
 lib
 
@@ -29,3 +30,17 @@ __pycache__
 vp_app.code-workspace
 
 yarn.lock
+
+# e2e/launcher temp artifacts
+scratchpad/fleet_test/
+scratchpad/two_pcs/
+
+# 웹 업데이트 암호 키 — 커밋 금지, 별도 백업 필수
+keys/
+*.vpu
+installer
+
+# 로컬 전용 — 공개 저장소 제외
+scratchpad/
+.codex/
+*.pdf

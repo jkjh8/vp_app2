@@ -14,7 +14,8 @@ const registerClientNamespace = (ioClient) => {
     socket.on('event', (msg) => {
       switch (msg.type) {
         case 'time':
-          updateTime(msg.value * 1000)
+          // windowId 지정 시 그 창만 시크(윈도우 모드), 미지정이면 기본 창/활성 덱.
+          updateTime(msg.value * 1000, msg.windowId)
           break
       }
       logger.debug(`Client message: ${msg}`)

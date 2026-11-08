@@ -8,9 +8,21 @@ import {
   getPlaylists,
   editPlaylist,
   setTracksToPlaylist,
+  setPlaylist,
   playlistPlay,
   editImageTime,
+  editTrack,
+  preloadNextTrack,
+  preloadPlaylistOnly,
+  setPlaybackMode,
+  switchPlaylistMode,
+  playWindowInPlaylist,
+  stopWindow,
 } from '../../../api/playlists/index.js'
+import {
+  setTrackAudioLive,
+  setDeckAudioLive,
+} from '../../../api/playlists/trackAudio.js'
 
 const router = express.Router()
 
@@ -63,6 +75,20 @@ router.put('/tracks', async (req, res) => {
   }
 })
 
+// UI에서 플레이리스트를 열/선택할 때 호출 — 호스트가 "현재 열린 플레이리스트"를 인지해야
+// 편집 시 그 플레이리스트만 프리로드한다(triggerPreloadOnEdit).
+router.put('/select', async (req, res) => {
+  try {
+    const { playlistId } = req.body
+    if (!playlistId) return res.status(400).json({ error: 'playlistId is required' })
+    const result = await setPlaylist(playlistId)
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error(`Error occurred while selecting playlist: ${error}`)
+    res.status(500).json({ error: 'Failed to select playlist' })
+  }
+})
+
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -82,10 +108,132 @@ router.get('/play', async (req, res) => {
   try {
     const { playlistId, trackIndex } = req.query
     const result = await playlistPlay(Number(playlistId), Number(trackIndex))
+    if (!result) {
+      // playlistPlay는 실패 시 null (플레이어 미연결 등) — 200으로 응답하면 클라이언트가 성공으로 오인한다.
+      return res
+        .status(503)
+        .json({
+          error:
+            'Failed to play playlist (player not connected or playlist unavailable)',
+        })
+    }
     res.status(200).json(result)
   } catch (error) {
     logger.error(`Error occurred while playing playlist: ${error}`)
     res.status(500).json({ error: 'Failed to play playlist' })
+  }
+})
+
+// 플레이리스트 로딩(프리로딩만, 재생 안 함) — 전 트랙을 메모리에 프리롤
+router.get('/preload', async (req, res) => {
+  try {
+    const result = await preloadPlaylistOnly(Number(req.query.playlistId))
+    if (!result)
+      return res.status(503).json({ error: 'Preload failed (player not connected?)' })
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error preloading playlist: ${error}`)
+    res.status(500).json({ error: 'Failed to preload playlist' })
+  }
+})
+
+// 전역 작업 모드 토글 ('scene'|'window'). body {value}
+router.put('/playbackmode', async (req, res) => {
+  try {
+    const mode = await setPlaybackMode(req.body?.value)
+    res.status(200).json({ playbackMode: mode })
+  } catch (error) {
+    logger.error(`Error occurred while setting playback mode: ${error}`)
+    res.status(500).json({ error: 'Failed to set playback mode' })
+  }
+})
+
+// 플레이리스트 1개 타입 즉시 전환 (상단 토글). body {id, mode:'scene'|'window'}
+router.put('/mode_switch', async (req, res) => {
+  try {
+    const { id, mode } = req.body
+    if (!id) return res.status(400).json({ error: 'id is required' })
+    const result = await switchPlaylistMode(id, mode)
+    if (!result) return res.status(404).json({ error: 'playlist not found' })
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error(`Error occurred while switching playlist mode: ${error}`)
+    res.status(500).json({ error: 'Failed to switch playlist mode' })
+  }
+})
+
+// 윈도우 모드: 단일 창 재생. query {playlistId, windowId, index?}
+router.get('/window/play', async (req, res) => {
+  try {
+    const { playlistId, windowId, index } = req.query
+    const result = await playWindowInPlaylist(
+      playlistId != null ? Number(playlistId) : null,
+      Number(windowId),
+      index != null ? Number(index) : 0,
+    )
+    if (!result)
+      return res
+        .status(503)
+        .json({ error: 'Failed to play window (player not connected or unsupported)' })
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error occurred while playing window: ${error}`)
+    res.status(500).json({ error: 'Failed to play window' })
+  }
+})
+
+// 윈도우 모드: 단일 창 정지. query {windowId}
+router.get('/window/stop', (req, res) => {
+  try {
+    const result = stopWindow(Number(req.query.windowId))
+    res.status(200).json({ message: result })
+  } catch (error) {
+    logger.error(`Error occurred while stopping window: ${error}`)
+    res.status(500).json({ error: 'Failed to stop window' })
+  }
+})
+
+// 현재 재생 트랙의 임베디드 오디오 라이브 변경 (볼륨 드래그 등 — 재조회 없이 즉시).
+// 영속화는 PUT /track patch. body {window_id?, streams?, channel_map?, volume?, muted?}
+router.put('/deck_audio/live', async (req, res) => {
+  try {
+    const { window_id, streams, channel_map, volume, muted } = req.body
+    const ok = setDeckAudioLive({ window_id, streams, channel_map, volume, muted })
+    res.status(200).json({ ok })
+  } catch (error) {
+    logger.error(`Error occurred while updating deck audio live: ${error}`)
+    res.status(500).json({ error: 'Failed to update deck audio' })
+  }
+})
+
+// 재생 중인 추가 오디오의 볼륨/뮤트/채널 라이브 변경 (슬라이더/토글/채널편집 — 재조회 없이 즉시).
+// 영속화는 별도로 PUT /track patch.audios 로. body {audioId, volume?, muted?, channels?}
+router.put('/track_audio/live', async (req, res) => {
+  try {
+    const { audioId, volume, muted, channels } = req.body
+    if (!audioId) {
+      return res.status(400).json({ error: 'audioId is required' })
+    }
+    const ok = setTrackAudioLive(audioId, { volume, muted, channels })
+    res.status(200).json({ ok })
+  } catch (error) {
+    logger.error(`Error occurred while updating track audio live: ${error}`)
+    res.status(500).json({ error: 'Failed to update track audio' })
+  }
+})
+
+// 트랙 부분 갱신: body {id, idx, patch:{time?,volume?,channel_map?,muted?,audios?,fade_*?}}
+router.put('/track', async (req, res) => {
+  try {
+    const { id, idx, patch } = req.body
+    if (!id || idx === undefined || !patch) {
+      return res.status(400).json({ error: 'id, idx and patch are required' })
+    }
+    const result = await editTrack(id, Number(idx), patch)
+    res.status(200).json(result)
+  } catch (error) {
+    logger.error(`Error occurred while updating track: ${error}`)
+    res.status(500).json({ error: 'Failed to update track' })
   }
 })
 

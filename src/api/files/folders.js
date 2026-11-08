@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app } from '../../runtime.js'
 import path from 'path'
 import fs from 'fs'
 
@@ -7,10 +7,6 @@ function getMediaPath() {
 }
 function getTmpPath() {
   return path.join(app.getPath('userData'), 'tmp')
-}
-
-function getLogoPath() {
-  return path.join(getMediaPath(), 'logo')
 }
 
 function existsMediaPath() {
@@ -29,14 +25,6 @@ function existsTmpPath() {
   return tmpPath
 }
 
-function existsLogoPath() {
-  const logoPath = getLogoPath()
-  if (!fs.existsSync(logoPath)) {
-    fs.mkdirSync(logoPath, { recursive: true })
-  }
-  return logoPath
-}
-
 function deleteTmpFiles() {
   const tmpPath = getTmpPath()
   fs.readdir(tmpPath, (err, files) => {
@@ -53,9 +41,7 @@ function deleteTmpFiles() {
 export {
   getMediaPath,
   getTmpPath,
-  getLogoPath,
   existsMediaPath,
   existsTmpPath,
-  existsLogoPath,
   deleteTmpFiles,
 }

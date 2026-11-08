@@ -1,6 +1,6 @@
 import express from 'express'
 import path from 'path'
-import { app } from 'electron'
+import { app } from '../runtime.js'
 import { logger } from '../logger/index.js'
 import apiRouter from './api/index.js'
 
